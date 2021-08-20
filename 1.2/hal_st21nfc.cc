@@ -44,7 +44,7 @@ typedef struct {
   nfc_stack_callback_t* p_cback_unwrap;
 } st21nfc_dev_t;
 
-const char* halVersion = "ST21NFC HAL1.2C Version 120-20210629-21W25p1";
+const char* halVersion = "ST21NFC HAL1.2C Version 120-20210819-21W33p1";
 
 uint8_t cmd_set_nfc_mode_enable[] = {0x2f, 0x02, 0x02, 0x02, 0x01};
 uint8_t hal_is_closed = 1;
