@@ -68,7 +68,7 @@ NCI_HAL_MODULE="nfc_nci.st21nfc"
 
 ###############################################################################
 # White list to be set at startup.
-DEVICE_HOST_WHITE_LIST={02:A1:A2:C0}
+DEVICE_HOST_WHITE_LIST={02:C0}
 
 ###############################################################################
 # BAIL OUT value for P2P
@@ -102,8 +102,11 @@ DEFAULT_SYS_CODE_PWR_STATE=0x3B
 ###############################################################################
 # Path and Files used for FW update binaries storage
 STNFC_FW_PATH_STORAGE="/vendor/firmware/"
-STNFC_FW_BIN_NAME="st54j_fw.bin"
-STNFC_FW_CONF_NAME="/vendor/etc/st54j_conf.txt"
+# Folder of the firmware configuration
+STNFC_FW_CONF_STORAGE="/vendor/etc/"
+
+STNFC_FW_BIN_NAME="st21nfc_fw.bin"
+STNFC_FW_CONF_NAME="st21nfc_conf.txt"
 
 ###############################################################################
 # Default off-host route for Felica.

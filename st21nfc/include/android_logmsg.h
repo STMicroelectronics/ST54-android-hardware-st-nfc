@@ -38,6 +38,8 @@ extern int GetByteArrayValue(const char* name, char* pValue, long bufflen,
                              long* len);
 extern int GetStrValue(const char* name, char* pValue, unsigned long l);
 
+extern char config_name_suffix[30];
+
 /* #######################
  * Set the log module name in .conf file
  * ########################## */
@@ -45,6 +47,7 @@ extern int GetStrValue(const char* name, char* pValue, unsigned long l);
 #define NAME_CE_ON_SWITCH_OFF_STATE "CE_ON_SWITCH_OFF_STATE"
 #define NAME_STNFC_FW_PATH_STORAGE "STNFC_FW_PATH_STORAGE"
 #define NAME_STNFC_FW_BIN_NAME "STNFC_FW_BIN_NAME"
+#define NAME_STNFC_FW_CONF_STORAGE "STNFC_FW_CONF_STORAGE"
 #define NAME_STNFC_FW_CONF_NAME "STNFC_FW_CONF_NAME"
 #define NAME_STNFC_FW_DEBUG_ENABLED "STNFC_FW_DEBUG_ENABLED"
 #define NAME_CORE_CONF_PROP "CORE_CONF_PROP"

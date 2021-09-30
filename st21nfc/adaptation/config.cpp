@@ -38,7 +38,21 @@ bool mAscii;
 #define extra_config_ext ".conf"
 #define IsStringValue 0x80000000
 
+// Defines the path where the hardware platform details are present.
+#define SYSFS_HW_PLATFORM_PATH1 "/sys/devices/soc0/hw_platform"
+#define SYSFS_HW_PLATFORM_PATH2 "/sys/devices/system/soc/soc0/hw_platform"
+
+// bDefines the path where the soc_id details are present.
+#define SYSFS_SOCID_PATH1 "/sys/devices/soc0/soc_id"
+#define SYSFS_SOCID_PATH2 "/sys/devices/system/soc/soc0/id"
+
+#define MAX_SOC_INFO_NAME_LEN (15)
+#define MAX_SUFFIX_NAME_LEN (30)
+#define MAX_DATA_CONFIG_PATH_LEN 64
+
 using namespace ::std;
+
+void findConfigFile(const string& configName, string& filePath);
 
 class CNfcParam : public string {
  public:
@@ -72,6 +86,8 @@ class CNfcConfig : public vector<const CNfcParam*> {
  private:
   CNfcConfig();
   bool readConfig(const char* name, bool bResetContent);
+  int file_exist(const char* filename);
+  int getconfiguration_id(char* config_file);
   void moveFromList();
   void moveToList();
   void add(const CNfcParam* pParam);
@@ -84,6 +100,87 @@ class CNfcConfig : public vector<const CNfcParam*> {
   inline void Set(unsigned long f) { state |= f; }
   inline void Reset(unsigned long f) { state &= ~f; }
 };
+
+/*******************************************************************************
+ * @brief This function reads the hardware information from the given path.
+ *******************************************************************************/
+static int read_line_from_file(const char* path, char* buf, size_t count) {
+  char* fgets_ret = NULL;
+  FILE* fd = NULL;
+  int rv = 0;
+
+  // opens the file to read the HW_PLATFORM detail of the target
+  fd = fopen(path, "r");
+  if (fd == NULL) return -1;
+
+  // stores the data that is read from the given path into buf
+  fgets_ret = fgets(buf, (int)count, fd);
+  if (NULL != fgets_ret)
+    rv = (int)strlen(buf);
+  else
+    rv = ferror(fd);
+
+  fclose(fd);
+
+  return rv;
+}
+
+/*******************************************************************************
+ * @brief This function gets the source information from the file.
+ *******************************************************************************/
+static int get_soc_info(char* buf, const char* soc_node_path1,
+                        const char* soc_node_path2) {
+  int ret = 0;
+
+  // checks whether the hw platform detail is present in this path
+  ret = read_line_from_file(soc_node_path1, buf, MAX_SOC_INFO_NAME_LEN);
+  if (ret < 0) {
+    // if the hw platform detail is not present in the former path it checks
+    // here
+    ret = read_line_from_file(soc_node_path2, buf, MAX_SOC_INFO_NAME_LEN);
+    if (ret < 0) {
+      ALOGE("getting socinfo(%s, %d) failed.\n", soc_node_path1, ret);
+      return ret;
+    }
+  }
+  if (ret && buf[ret - 1] == '\n') buf[ret - 1] = '\0';
+
+  return ret;
+}
+
+/*******************************************************************************
+ * @brief finds the configuration id value for the particular target.
+ *******************************************************************************/
+int CNfcConfig::getconfiguration_id(char* config_file) {
+  char target_type[MAX_SOC_INFO_NAME_LEN] = {'\0'};
+  char soc_info[MAX_SOC_INFO_NAME_LEN] = {'\0'};
+  string strPath;
+  int rc = 0;
+
+  rc = get_soc_info(soc_info, SYSFS_SOCID_PATH1, SYSFS_SOCID_PATH2);
+  if (rc < 0) {
+    ALOGE("get_soc_info(SOC_ID) fail!\n");
+    return -1;
+  }
+
+  rc = get_soc_info(target_type, SYSFS_HW_PLATFORM_PATH1,
+                    SYSFS_HW_PLATFORM_PATH2);
+  if (rc < 0) {
+    ALOGE("get_soc_info(HW_PLATFORM) fail!\n");
+    return -1;
+  }
+
+  // Converting the HW_PLATFORM detail that is read from target to lowercase
+  for (int i = 0; target_type[i]; i++) target_type[i] = tolower(target_type[i]);
+
+  // store Soc Info/targetId config
+  snprintf(config_file, MAX_DATA_CONFIG_PATH_LEN, "%s_%s", soc_info,
+           target_type);
+
+  findConfigFile(config_file, strPath);
+
+  return 0;
+}
 
 /*******************************************************************************
 **
@@ -362,6 +459,13 @@ CNfcConfig::CNfcConfig() : mValidFile(true) {}
 CNfcConfig::~CNfcConfig() {}
 
 /*******************************************************************************
+ * @brief checks whether the given file exist.
+ *******************************************************************************/
+int CNfcConfig::file_exist(const char* filename) {
+  struct stat buffer;
+  return (stat(filename, &buffer) == 0);
+}
+/*******************************************************************************
 **
 ** Function:    CNfcConfig::GetInstance()
 **
@@ -372,6 +476,7 @@ CNfcConfig::~CNfcConfig() {}
 *******************************************************************************/
 CNfcConfig& CNfcConfig::GetInstance() {
   static CNfcConfig theInstance;
+  char config_name_generic[MAX_DATA_CONFIG_PATH_LEN] = {'\0'};
 
   if (theInstance.size() == 0 && theInstance.mValidFile) {
     string strPath;
@@ -383,10 +488,24 @@ CNfcConfig& CNfcConfig::GetInstance() {
         return theInstance;
       }
     }
+    // check platform-specific config file
+    theInstance.getconfiguration_id(config_name_suffix);
+
+    snprintf(config_name_generic, MAX_DATA_CONFIG_PATH_LEN,
+             "libnfc-hal-st-%s.conf", config_name_suffix);
+
+    findConfigFile(config_name_generic, strPath);
+    if ((theInstance.file_exist(strPath.c_str()))) {
+      STLOG_HAL_D("%s config file found = %s\n", __func__, strPath.c_str());
+      theInstance.readConfig(strPath.c_str(), true);
+      return theInstance;
+    }
+
+    // Use the default config file.
     findConfigFile(config_name, strPath);
+    STLOG_HAL_D("%s found %s \n", __func__, strPath.c_str());
     theInstance.readConfig(strPath.c_str(), true);
   }
-
   return theInstance;
 }
 

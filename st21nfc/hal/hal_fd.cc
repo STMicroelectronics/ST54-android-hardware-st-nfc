@@ -23,6 +23,7 @@
 #include <hardware/nfc.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include "android_logmsg.h"
 #include "halcore.h"
 /* Initialize fw info structure pointer used to access fw info structure */
@@ -75,6 +76,10 @@ const char **loader_patch;
 const char *loader_patch_size_tab;
 uint8_t *pCmdLd;
 int ld_count = 0;
+
+#define MAX_DATA_CONFIG_PATH_LEN 64
+char config_name_suffix[30];
+
 extern const int loader_RA7_patch_version;
 extern const int loader_RA7_patch_cmd_nb;
 extern const char loader_RA7_patch_AuthKeyId;
@@ -129,6 +134,28 @@ static const char *get_fw_default_cfg_name() {
   }
 }
 
+static const char *get_fw_template_cfg_name() {
+  if (mFWInfo->chipHwVersion == HW_ST54J) {
+    return "st54j_conf_%s.txt";
+  } else if (mFWInfo->chipHwVersion == HW_NFCD) {
+    return "st21nfc_conf_%s.txt";
+  } else {
+    // default
+    return "st21nfc_conf_%s.txt";
+  }
+}
+
+static int file_exist(const char *filename) {
+  struct stat buffer;
+  return (stat(filename, &buffer) == 0);
+}
+
+static int getconfiguration_id(char *config_file) {
+  // generating a generic config file name based on the target details
+  snprintf(config_file, MAX_DATA_CONFIG_PATH_LEN, get_fw_template_cfg_name(),
+           config_name_suffix);
+  return 0;
+}
 /**
  * Open firmware and config file and parse their content
  * Returns a bitmask of what is available and fills the information
@@ -139,6 +166,7 @@ static void hal_fd_load_files() {
   char ConfPath[256];
   char fwBinName[256];
   char fwConfName[256];
+  char fwAltConfName[256];
   STLOG_HAL_D("  %s - enter", __func__);
 
   if (!GetStrValue(NAME_STNFC_FW_PATH_STORAGE, (char *)FwPath,
@@ -149,6 +177,14 @@ static void hal_fd_load_files() {
         "\n",
         __func__);
     strlcpy(FwPath, "/vendor/firmware/", sizeof(FwPath));
+  }
+  if (!GetStrValue(NAME_STNFC_FW_CONF_STORAGE, (char *)ConfPath,
+                   sizeof(ConfPath))) {
+    STLOG_HAL_D(
+        "%s - FW config path not found in conf. use default location "
+        "/vendor/etc/\n",
+        __func__);
+    strlcpy(ConfPath, "/vendor/etc/", sizeof(ConfPath));
   }
 
   if (!GetStrValue(NAME_STNFC_FW_BIN_NAME, (char *)fwBinName,
@@ -167,21 +203,30 @@ static void hal_fd_load_files() {
     const char *defaultcfgfile = get_fw_default_cfg_name();
     STLOG_HAL_D(
         "%s - FW config file name not found in conf. use default name "
-        "/vendor/etc/%s\n",
-        __func__, defaultcfgfile);
-    strlcpy(fwConfName, "/vendor/etc/", sizeof(fwConfName));
+        "%s/%s\n",
+        __func__, ConfPath, defaultcfgfile);
+    strlcpy(fwConfName, ConfPath, sizeof(fwConfName));
     strlcat(fwConfName, defaultcfgfile, sizeof(fwConfName));
   }
 
   // Getting information about FW patch, if any
-  strlcpy(ConfPath, FwPath, sizeof(ConfPath));
   strlcat(FwPath, fwBinName, sizeof(FwPath));
-  if (fwConfName[0] == '/') {
-    // absolute path
-    strlcpy(ConfPath, fwConfName, sizeof(ConfPath));
-  } else {
-    // relative to STNFC_FW_PATH_STORAGE
-    strlcat(ConfPath, fwConfName, sizeof(ConfPath));
+
+  // check if platfrom-specific FW configuration file exists
+  getconfiguration_id(fwAltConfName);
+  strlcat(ConfPath, fwAltConfName, sizeof(ConfPath));
+  if (!file_exist(ConfPath)) {
+    if (fwConfName[0] == '/') {
+      // absolute path
+      strlcpy(ConfPath, fwConfName, sizeof(ConfPath));
+    } else {
+      if (!GetStrValue(NAME_STNFC_FW_CONF_STORAGE, (char *)ConfPath,
+                       sizeof(ConfPath))) {
+        strlcpy(ConfPath, "/vendor/etc/", sizeof(ConfPath));
+      }
+      // relative to STNFC_FW_PATH_STORAGE
+      strlcat(ConfPath, fwConfName, sizeof(ConfPath));
+    }
   }
   STLOG_HAL_D("%s - FW update file = %s", __func__, FwPath);
   STLOG_HAL_D("%s - FW config file = %s", __func__, ConfPath);
@@ -652,6 +697,7 @@ void LdUpdateHandler(HALHANDLE mHalHandle, uint16_t data_len, uint8_t *p_data) {
           }
         } else {
           STLOG_HAL_D("%s : LD flash not succeeded", __func__);
+          ld_count = 0;
           SendExitLoadMode(mHalHandle);
         }
       }

@@ -31,6 +31,7 @@ extern void HalCoreCallback(void* context, uint32_t event, const void* d,
                             size_t length);
 extern bool I2cOpenLayer(void* dev, HAL_CALLBACK callb, HALHANDLE* pHandle);
 extern void I2cCloseLayer();
+extern void I2cRecovery();
 extern int i2cNfccMayUseEse(int use);
 
 typedef struct {
@@ -146,6 +147,9 @@ bool hal_wrapper_open(st21nfc_dev_t* dev, nfc_stack_callback_t* p_cback,
   }
 
   mHalHandle = *pHandle;
+
+  STLOG_HAL_V("%s Start Timer", __func__);
+  HalSendDownstreamTimer(mHalHandle, 10000);
 
   return 1;
 }
@@ -278,6 +282,8 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
                                          0x01, 0x00 /* + len + payload */};
   uint8_t propNfcReadNfccConfig[] = {0x2F, 0x02, 0x05, 0x03,
                                      0x00, 0x01, 0x01, 0x00};
+  uint8_t propNfcReadHwConfig[] = {0x2F, 0x02, 0x05, 0x03,
+                                   0x00, 0x02, 0x01, 0x00};
   uint8_t propNfcWriteNfccConfigHdr[] = {0x2F, 0x02, 0x00 /* len + 6 */,
                                          0x04, 0x00, 0x01,
                                          0x01, 0x00 /* + len + payload */};
@@ -518,6 +524,27 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
               case HAL_WRAPPER_CONFSUBSTATE_TEST_CONFIG_WRITING:  // TEST_CONFIG
                                                                   // was set
               {
+                STLOG_HAL_D("%s - Sending PROP_GET_CONFIG(HW_CONFIG)",
+                            __func__);
+                if (!HalSendDownstreamTimer(mHalHandle, propNfcReadHwConfig,
+                                            sizeof(propNfcReadHwConfig), 50)) {
+                  STLOG_HAL_E("NFC-NCI HAL: %s  SendDownstream failed",
+                              __func__);
+                }
+                mHalWrapperStateConfigSubstate =
+                    HAL_WRAPPER_CONFSUBSTATE_HW_CONFIG_READING;
+              } break;
+
+              case HAL_WRAPPER_CONFSUBSTATE_HW_CONFIG_READING:  // HW_CONFIG
+                                                                // was set
+              {
+                if (IS_ST54J()) {
+                  if (CHECK_CONFIG_BIT_val(20, 0) == 0x01) {
+                    STLOG_HAL_D("%s - CLF version : ST54K", __func__);
+                  } else {
+                    STLOG_HAL_D("%s - CLF version : ST54J", __func__);
+                  }
+                }
                 STLOG_HAL_D("%s - Sending PROP_GET_CONFIG(NFCC_CONFIG)",
                             __func__);
                 if (!HalSendDownstreamTimer(mHalHandle, propNfcReadNfccConfig,
@@ -1003,6 +1030,15 @@ static void halWrapperCallback(uint8_t event,
         HalSendDownstreamStopTimer(mHalHandle);
         hal_fd_close();
         mHalWrapperState = HAL_WRAPPER_STATE_CLOSED;
+        return;
+      }
+      break;
+
+    case HAL_WRAPPER_STATE_OPEN:
+      if (event == HAL_WRAPPER_TIMEOUT_EVT) {
+        STLOG_HAL_D("NFC-NCI HAL: %s  Timeout accessing the CLF.", __func__);
+        HalSendDownstreamStopTimer(mHalHandle);
+        I2cRecovery();
         return;
       }
       break;

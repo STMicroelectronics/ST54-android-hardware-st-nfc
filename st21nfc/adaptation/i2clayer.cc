@@ -44,6 +44,7 @@
 #define ST21NFC_SET_POLARITY_FALLING _IOR(ST21NFC_MAGIC, 0x04, unsigned int)
 #define ST21NFC_SET_POLARITY_HIGH _IOR(ST21NFC_MAGIC, 0x05, unsigned int)
 #define ST21NFC_SET_POLARITY_LOW _IOR(ST21NFC_MAGIC, 0x06, unsigned int)
+
 /*
 #define ST21NFC_GET_WAKEUP _IO(ST21NFC_MAGIC, 0x01)
 #define ST21NFC_PULSE_RESET _IO(ST21NFC_MAGIC, 0x02)
@@ -54,6 +55,7 @@
 */
 #define ST21NFC_GET_POLARITY _IO(ST21NFC_MAGIC, 0x07)
 #define ST21NFC_RECOVERY _IO(ST21NFC_MAGIC, 0x08)
+
 #define ST21NFC_USE_ESE _IOW(ST21NFC_MAGIC, 0x09, unsigned int)
 //------- end from st21nfc.h in kernel driver
 #define LINUX_DBGBUFFER_SIZE 300
@@ -61,6 +63,7 @@
 static int fidI2c = 0;
 static int cmdPipe[2] = {0, 0};
 static int is4bytesheader = 1;
+static bool recovery_mode = false;
 
 static struct pollfd event_table[2];
 static pthread_t threadHandle = (pthread_t)NULL;
@@ -75,6 +78,7 @@ pthread_mutex_t i2cguard_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 static int i2cSetPolarity(int fid, bool low, bool edge);
 static int i2cResetPulse(int fid);
+static int i2cRecovery(int fid);
 static int i2cRead(int fid, uint8_t* pvBuffer, int length);
 static int i2cGetGPIOState(int fid);
 static int i2cWrite(int fd, const uint8_t* pvBuffer, int length);
@@ -125,85 +129,103 @@ static void* I2cWorkerThread(void* arg) {
       int count = 0;
 
       do {
-        // load first four bytes:
-        int hdrsz = is4bytesheader ? 4 : 3;
-        int extra = 0;  // did we read past the header?
-        int bytesRead = i2cRead(fidI2c, buffer, hdrsz);
+        if (!recovery_mode) {
+          // load first four bytes:
+          int hdrsz = is4bytesheader ? 4 : 3;
+          int extra = 0;  // did we read past the header?
+          int bytesRead = i2cRead(fidI2c, buffer, hdrsz);
 
-        if (bytesRead == hdrsz) {
-          if ((hdrsz == 4) && (buffer[0] == 0x60) && (buffer[1] == 0x00)) {
-            is4bytesheader = 0;  // read only 3 bytes until next reset. We are
-                                 // either in loader mode or in older firmware
-          }
-          if ((hdrsz == 4) && (buffer[0] != 0x7E)) {
-            extra = 1;  // we read 1 payload byte already
-          } else if (hdrsz == 4) {
-            // we got dummy 7e, discard and continue as if not there.
-            buffer[0] = buffer[1];
-            buffer[1] = buffer[2];
-            buffer[2] = buffer[3];
-          }
-          if ((buffer[0] != 0x7E) && (buffer[1] != 0x7E)) {
-            readOk = true;
-          } else {
-            if (buffer[1] != 0x7E) {
-              STLOG_HAL_W("Idle data: 2nd byte is 0x%02x, reading next byte\n",
-                          buffer[1]);
+          if (bytesRead == hdrsz) {
+            if ((hdrsz == 4) && (buffer[0] == 0x60) && (buffer[1] == 0x00)) {
+              is4bytesheader = 0;  // read only 3 bytes until next reset. We are
+                                   // either in loader mode or in older firmware
+            }
+            if ((hdrsz == 4) && (buffer[0] != 0x7E)) {
+              extra = 1;  // we read 1 payload byte already
+            } else if (hdrsz == 4) {
+              // we got dummy 7e, discard and continue as if not there.
               buffer[0] = buffer[1];
               buffer[1] = buffer[2];
+              buffer[2] = buffer[3];
+            }
+            if ((buffer[0] != 0x7E) && (buffer[1] != 0x7E)) {
+              readOk = true;
+            } else {
+              if (buffer[1] != 0x7E) {
+                STLOG_HAL_W(
+                    "Idle data: 2nd byte is 0x%02x, reading next byte\n",
+                    buffer[1]);
+                buffer[0] = buffer[1];
+                buffer[1] = buffer[2];
+                bytesRead = i2cRead(fidI2c, buffer + 2, 1);
+                if (bytesRead == 1) {
+                  readOk = true;
+                } else {
+                  STLOG_HAL_E("Failed to read last byte\n");
+                }
+              } else if (buffer[2] != 0x7E) {
+                STLOG_HAL_W(
+                    "Idle data: 3rd byte is 0x%02x, reading next 2 bytes\n",
+                    buffer[2]);
+                buffer[0] = buffer[2];
+                bytesRead = i2cRead(fidI2c, buffer + 1, 2);
+                if (bytesRead == 2) {
+                  readOk = true;
+                } else {
+                  STLOG_HAL_E("Failed to read last 2 bytes\n");
+                }
+              } else {
+                STLOG_HAL_W("received idle data\n");
+              }
+            }
+
+            // in loader mode, extra 7E byte is not supported, so need to skip
+            // duplicate 1st byte that happens on 4F answers
+            if ((readOk == true) && (extra == 0) && (buffer[0] == 0x4F) &&
+                (buffer[1] == 0x4F)) {
+              // overwrite the duplicate byte
+              buffer[1] = buffer[2];
+              // read the actual length byte
               bytesRead = i2cRead(fidI2c, buffer + 2, 1);
-              if (bytesRead == 1) {
-                readOk = true;
-              } else {
-                STLOG_HAL_E("Failed to read last byte\n");
+              if (bytesRead != 1) {
+                readOk = false;
+                STLOG_HAL_E("Failed to read last byte after duplicate\n");
               }
-            } else if (buffer[2] != 0x7E) {
-              STLOG_HAL_W(
-                  "Idle data: 3rd byte is 0x%02x, reading next 2 bytes\n",
-                  buffer[2]);
-              buffer[0] = buffer[2];
-              bytesRead = i2cRead(fidI2c, buffer + 1, 2);
-              if (bytesRead == 2) {
-                readOk = true;
+            }
+
+            if (readOk == true) {
+              int remaining = buffer[2];
+              bytesRead = 0;
+
+              // read and pass to HALCore
+              if (remaining - extra > 0) {
+                bytesRead =
+                    i2cRead(fidI2c, buffer + 3 + extra, remaining - extra);
+              }
+              if (bytesRead == remaining - extra) {
+                DispHal("RX DATA", buffer, 3 + extra + bytesRead);
+                HalSendUpstream(hHAL, buffer, 3 + extra + bytesRead);
               } else {
-                STLOG_HAL_E("Failed to read last 2 bytes\n");
+                readOk = false;
+                STLOG_HAL_E(
+                    "! didn't read expected bytes from "
+                    "i2c,bytesRead=%d,remaining=%d,extra=%d,is4bytesheader=%"
+                    "d\n",
+                    bytesRead, remaining, extra, is4bytesheader);
               }
             } else {
-              STLOG_HAL_W("received idle data\n");
-            }
-          }
-
-          if (readOk == true) {
-            int remaining = buffer[2];
-            bytesRead = 0;
-
-            // read and pass to HALCore
-            if (remaining - extra > 0) {
-              bytesRead =
-                  i2cRead(fidI2c, buffer + 3 + extra, remaining - extra);
-            }
-            if (bytesRead == remaining - extra) {
-              DispHal("RX DATA", buffer, 3 + extra + bytesRead);
-              HalSendUpstream(hHAL, buffer, 3 + extra + bytesRead);
-            } else {
-              readOk = false;
               STLOG_HAL_E(
-                  "! didn't read expected bytes from "
-                  "i2c,bytesRead=%d,remaining=%d,extra=%d,is4bytesheader=%d\n",
-                  bytesRead, remaining, extra, is4bytesheader);
+                  "!readOk; bytesRead=%d, buffer: 0x%02x 0x%02x 0x%02x\n",
+                  bytesRead, buffer[0], buffer[1], buffer[2]);
             }
+
           } else {
-            STLOG_HAL_E("!readOk; bytesRead=%d, buffer: 0x%02x 0x%02x 0x%02x\n",
-                        bytesRead, buffer[0], buffer[1], buffer[2]);
+            STLOG_HAL_E("! didn't read %d requested bytes from i2c\n", hdrsz);
           }
 
-        } else {
-          STLOG_HAL_E("! didn't read %d requested bytes from i2c\n", hdrsz);
+          readOk = false;
+          memset(buffer, 0xca, sizeof(buffer));
         }
-
-        readOk = false;
-        memset(buffer, 0xca, sizeof(buffer));
-
         /* read while we have data available, up to 2 times then allow writes */
       } while ((i2cGetGPIOState(fidI2c) == 1) && (count++ < 2));
     }
@@ -342,6 +364,15 @@ void I2cResetPulse() {
   i2cResetPulse(fidI2c);
   (void)pthread_mutex_unlock(&i2ctransport_mtx);
 }
+void I2cRecovery() {
+  ALOGD("%s: enter\n", __func__);
+
+  (void)pthread_mutex_lock(&i2ctransport_mtx);
+  recovery_mode = true;
+  i2cRecovery(fidI2c);
+  recovery_mode = false;
+  (void)pthread_mutex_unlock(&i2ctransport_mtx);
+}
 /**************************************************************************************************
  *
  *                                      Private API Definition
@@ -398,6 +429,21 @@ static int i2cResetPulse(int fid) {
   is4bytesheader = 1;  // reset the flag
   return result;
 } /* i2cResetPulse*/
+
+/**
+ * Call the st21nfc driver to generate pulses on RESET line to get a recovery.
+ * @param fid File descriptor for NFC device
+ * @return Result of IOCTL system call (0 if ok)
+ */
+static int i2cRecovery(int fid) {
+  int result;
+
+  if (-1 == (result = ioctl(fid, ST21NFC_RECOVERY, NULL))) {
+    result = -1;
+  }
+  STLOG_HAL_D("! i2cRecovery!!, result = %d", result);
+  return result;
+} /* i2cRecovery*/
 
 /**
  * Signal kernel driver that the NFCC may or may not use the eSE
