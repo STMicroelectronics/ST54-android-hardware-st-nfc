@@ -12,6 +12,23 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+package {
+    default_applicable_licenses: ["vendor_st_nfc_hardware_st_nfc_license"],
+}
+
+// Added automatically by a large-scale-change
+// http://go/android-license-faq
+license {
+    name: "vendor_st_nfc_hardware_st_nfc_license",
+    visibility: [":__subpackages__"],
+    license_kinds: [
+        "SPDX-license-identifier-Apache-2.0",
+    ],
+    license_text: [
+        "LICENSE",
+    ],
+}
+
 cc_library_static {
 name:
   "nfc_nci.st21nfc.static", defaults : ["hidl_defaults"],
@@ -20,6 +37,8 @@ name:
 
                                                      cflags :
       [
+        "-DST21NFC",
+        "-DST21NFC_DTA",
         "-Wall",
         "-Werror",
         "-Wextra",

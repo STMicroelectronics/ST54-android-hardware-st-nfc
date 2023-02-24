@@ -45,6 +45,7 @@
 #define ST21NFC_SET_POLARITY_HIGH _IOR(ST21NFC_MAGIC, 0x05, unsigned int)
 #define ST21NFC_SET_POLARITY_LOW _IOR(ST21NFC_MAGIC, 0x06, unsigned int)
 
+#define ST21NFC_CLK_DISABLE_UNPREPARE _IO(ST21NFC_MAGIC, 0x0A)
 /*
 #define ST21NFC_GET_WAKEUP _IO(ST21NFC_MAGIC, 0x01)
 #define ST21NFC_PULSE_RESET _IO(ST21NFC_MAGIC, 0x02)
@@ -70,6 +71,7 @@ static struct pollfd event_table[2];
 static pthread_t threadHandle = (pthread_t)NULL;
 pthread_mutex_t i2ctransport_mtx = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t i2cguard_mtx = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t i2cguard_write = PTHREAD_MUTEX_INITIALIZER;
 
 /**************************************************************************************************
  *
@@ -256,6 +258,9 @@ static void* I2cWorkerThread(void* arg) {
       switch (cmd) {
         case 'X':
           STLOG_HAL_D("received close command\n");
+          if (-1 == ioctl(fidI2c, ST21NFC_CLK_DISABLE_UNPREPARE, NULL)) {
+            STLOG_HAL_E("ioctl(ST21NFC_CLK_DISABLE_UNPREPARE) failed\n");
+          }
           closeThread = true;
           break;
 
@@ -367,7 +372,10 @@ void I2cCloseLayer() {
     return;
   }
 
+  (void)pthread_mutex_lock(&i2cguard_write);
   I2cWriteCmd(&cmd, sizeof(cmd));
+  (void)pthread_mutex_unlock(&i2cguard_write);
+
   /* wait for terminate */
   ret = pthread_join(threadHandle, (void**)NULL);
   if (ret != 0) {
@@ -397,6 +405,9 @@ void I2cRecovery() {
   recovery_mode = false;
   (void)pthread_mutex_unlock(&i2ctransport_mtx);
 }
+
+extern "C" void I2cRecoveryFactory() { I2cRecovery(); }
+
 /**************************************************************************************************
  *
  *                                      Private API Definition
@@ -462,11 +473,19 @@ static int i2cResetPulse(int fid) {
  */
 static int i2cRecovery(int fid) {
   int result;
+  uint8_t cmd = 'n';
 
   if (-1 == (result = ioctl(fid, ST21NFC_RECOVERY, NULL))) {
     result = -1;
   }
   STLOG_HAL_D("! i2cRecovery!!, result = %d", result);
+
+  (void)pthread_mutex_lock(&i2cguard_write);
+  // send NOOP to the I2CWorkerThread to re-enter in poll and rearm the IRQ
+  // handler
+  I2cWriteCmd(&cmd, sizeof(cmd));
+  (void)pthread_mutex_unlock(&i2cguard_write);
+
   return result;
 } /* i2cRecovery*/
 
@@ -553,9 +572,10 @@ redo:
   }
   /* If we're here, we failed to write to NFCC. Retry after 500ms because some
   CPUs have shown such long unavailability sometimes */
-  if (halfsecs < 10) {
+  if (halfsecs < 4) {
     usleep(500000);
     halfsecs++;
+    retries = 0;
     goto redo;
   }
   /* The CLF did not recover, give up */

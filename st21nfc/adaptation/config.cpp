@@ -403,9 +403,9 @@ bool CNfcConfig::readConfig(const char* name, bool bResetContent) {
             int n = (i + 1) / 2;
             while (n-- > 0) strValue.push_back(((numValue >> (n * 8)) & 0xFF));
           }
-          if (strValue.length() > 0) {
+          if (strValue.length() > 0)
             pParam = new CNfcParam(token.c_str(), strValue);
-          } else
+          else
             pParam = new CNfcParam(token.c_str(), numValue);
           add(pParam);
           strValue.erase();
@@ -786,9 +786,12 @@ CNfcParam::CNfcParam(const char* name, unsigned long value)
 *******************************************************************************/
 extern "C" int GetStrValue(const char* name, char* pValue, unsigned long l) {
   size_t len = l;
+  int r = 0;
   CNfcConfig& rConfig = CNfcConfig::GetInstance();
   mAscii = true;
-  return rConfig.getValue(name, pValue, len);
+  r = rConfig.getValue(name, pValue, len);
+  mAscii = false;
+  return r;
 }
 
 /*******************************************************************************

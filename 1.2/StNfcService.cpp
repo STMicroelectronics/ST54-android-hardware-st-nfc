@@ -18,10 +18,15 @@
  ******************************************************************************/
 
 #define LOG_TAG "stnfc@1.2-service.st"
+#include <android-base/properties.h>
 #include <android/hardware/nfc/1.1/INfc.h>
+#include <dlfcn.h>
 
 #include <hidl/LegacySupport.h>
 #include "Nfc.h"
+
+#define VENDOR_LIB_PATH "/vendor/lib64/"
+#define VENDOR_LIB_EXT ".so"
 
 // Generated HIDL files
 using android::OK;
@@ -32,9 +37,38 @@ using android::hardware::joinRpcThreadpool;
 using android::hardware::nfc::V1_2::INfc;
 using android::hardware::nfc::V1_2::implementation::Nfc;
 
+typedef int (*STEseReset)(void);
+
 int main() {
   ALOGD(" ST NFC HAL Service 1.2 is starting.");
+
+  // Not registering the HAL service when device node is not present
+  if (access("/dev/st21nfc", F_OK) != 0) {
+    ALOGD("Cannot open /dev/st21nfc, do not start ST NFC HAL");
+    configureRpcThreadpool(0, false /*callerWillJoin*/);
+    joinRpcThreadpool();
+  }
+
   sp<INfc> nfc_service = new Nfc();
+
+  std::string valueStr =
+      android::base::GetProperty("persist.vendor.nfc.streset", "");
+  if (valueStr.length() > 0) {
+    valueStr = VENDOR_LIB_PATH + valueStr + VENDOR_LIB_EXT;
+    void* stdll = dlopen(valueStr.c_str(), RTLD_NOW);
+    ALOGD("ST NFC HAL STReset starting.");
+    if (stdll) {
+      ALOGD("STReset Start");
+      STEseReset fn = (STEseReset)dlsym(stdll, "boot_reset");
+      if (fn) {
+        int ret = fn();
+        ALOGD("STReset Result=%d", ret);
+      }
+    } else {
+      ALOGE("%s not found, do nothing.", valueStr.c_str());
+    }
+    ALOGD("ST NFC HAL STReset Done.");
+  }
 
   configureRpcThreadpool(1, true /*callerWillJoin*/);
   status_t status = nfc_service->registerAsService();

@@ -17,8 +17,8 @@
  *
  ******************************************************************************/
 #include "android_logmsg.h"
-#include <stdio.h>
 #include <pthread.h>
+#include <stdio.h>
 
 void DispHal(const char* title, const void* data, size_t length);
 unsigned char hal_trace_level = STNFC_TRACE_LEVEL_DEBUG;

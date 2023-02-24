@@ -31,6 +31,7 @@ extern int I2cWriteCmd(const uint8_t* x, size_t len);
 extern void DispHal(const char* title, const void* data, size_t length);
 
 extern uint32_t ScrProtocolTraceFlag;  // = SCR_PROTO_TRACE_ALL;
+extern pthread_mutex_t i2cguard_write;
 
 // HAL WRAPPER
 static void HalStopTimer(HalInstance* inst);
@@ -84,9 +85,11 @@ void HalCoreCallback(void* context, uint32_t event, const void* d,
 
       // Send write command to IO thread
       cmd = 'W';
+      (void)pthread_mutex_lock(&i2cguard_write);
       I2cWriteCmd(&cmd, sizeof(cmd));
       I2cWriteCmd((const uint8_t*)&length, sizeof(length));
       I2cWriteCmd(data, length);
+      (void)pthread_mutex_unlock(&i2cguard_write);
       break;
 
     case HAL_EVENT_DATAIND:
@@ -113,7 +116,9 @@ void HalCoreCallback(void* context, uint32_t event, const void* d,
 
       // Write terminate command
       cmd = 'X';
+      (void)pthread_mutex_lock(&i2cguard_write);
       I2cWriteCmd(&cmd, sizeof(cmd));
+      (void)pthread_mutex_unlock(&i2cguard_write);
       break;
 
     case HAL_EVENT_TIMER_TIMEOUT:

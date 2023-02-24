@@ -25,22 +25,28 @@ namespace android {
 namespace hardware {
 namespace nfc {
 
+typedef struct {
+  uint64_t mOpenCount;
+  Nfc* nfc;
+} stHalCookie;
+
 std::shared_ptr<INfcClientCallback> Nfc::mCallback = nullptr;
 AIBinder_DeathRecipient* clientDeathRecipient = nullptr;
 pthread_mutex_t mLockOpenClose = PTHREAD_MUTEX_INITIALIZER;
 uint64_t mOpenCount = 0;
+stHalCookie mHalCookie;
 
 void OnDeath(void* cookie) {
   pthread_mutex_lock(&mLockOpenClose);
-  LOG(INFO) << __func__ << "cookie : " << (*(uint64_t*)cookie) << " mOpenCount "
-            << (unsigned long long)mOpenCount;
-  if (*(uint64_t*)cookie == mOpenCount) {
+  stHalCookie* mCookie = static_cast<stHalCookie*>(cookie);
+  LOG(INFO) << __func__ << "cookie : " << mCookie->mOpenCount
+            << " mOpenCount : " << mOpenCount;
+  if (mCookie->mOpenCount == mOpenCount) {
     if (Nfc::mCallback != nullptr &&
         !AIBinder_isAlive(Nfc::mCallback->asBinder().get())) {
       LOG(INFO) << __func__ << " Nfc service has died";
       pthread_mutex_unlock(&mLockOpenClose);
-      Nfc* nfc = static_cast<Nfc*>(cookie);
-      nfc->close(NfcCloseType::DISABLE);
+      mCookie->nfc->close(NfcCloseType::DISABLE);
     }
   }
   pthread_mutex_unlock(&mLockOpenClose);
@@ -57,18 +63,20 @@ void OnDeath(void* cookie) {
     pthread_mutex_lock(&mLockOpenClose);
     mOpenCount++;
     Nfc::mCallback = clientCallback;
+    mHalCookie.mOpenCount = mOpenCount;
+    mHalCookie.nfc = this;
 
     clientDeathRecipient = AIBinder_DeathRecipient_new(OnDeath);
     auto linkRet =
         AIBinder_linkToDeath(clientCallback->asBinder().get(),
-                             clientDeathRecipient, &mOpenCount /* cookie */);
+                             clientDeathRecipient, &mHalCookie /* cookie */);
     if (linkRet != STATUS_OK) {
       LOG(ERROR) << __func__ << ": linkToDeath failed: " << linkRet;
       // Just ignore the error.
     }
 
     int ret = StNfc_hal_open(eventCallback, dataCallback);
-    LOG(INFO) << "Nfc::open Exit count " << (unsigned long long)mOpenCount;
+    LOG(INFO) << "Nfc::open Exit count " << mOpenCount;
     pthread_mutex_unlock(&mLockOpenClose);
     return ret == 0 ? ndk::ScopedAStatus::ok()
                     : ndk::ScopedAStatus::fromServiceSpecificError(
@@ -141,7 +149,6 @@ void OnDeath(void* cookie) {
 }
 
 ::ndk::ScopedAStatus Nfc::preDiscover() {
-  LOG(INFO) << "preDiscover";
   if (Nfc::mCallback == nullptr) {
     LOG(ERROR) << __func__ << "mCallback null";
     return ndk::ScopedAStatus::fromServiceSpecificError(
@@ -155,7 +162,6 @@ void OnDeath(void* cookie) {
 
 ::ndk::ScopedAStatus Nfc::write(const std::vector<uint8_t>& data,
                                 int32_t* _aidl_return) {
-  LOG(INFO) << "write";
   if (Nfc::mCallback == nullptr) {
     LOG(ERROR) << __func__ << "mCallback null";
     return ndk::ScopedAStatus::fromServiceSpecificError(

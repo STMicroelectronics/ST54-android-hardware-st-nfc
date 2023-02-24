@@ -521,6 +521,7 @@ uint8_t ft_cmd_HwReset(uint8_t *pdata, uint8_t *clf_mode, bool force) {
     // RA8 : 020100
     // RA9 : 020300
     // 54J : 010?00
+    // 54L : uses loader V3 (trigger A2, not A1)
     if (pdata[16] == 0x01) {
       mFWInfo->chipHwVersion = HW_ST54J;
       mFWInfo->chipHwRevision = 0xFF;  // unknown:FF, Rev A: 00; B: 02; C: 03
@@ -575,8 +576,17 @@ uint8_t ft_cmd_HwReset(uint8_t *pdata, uint8_t *clf_mode, bool force) {
   } else if ((pdata[2] == 0x41) && (pdata[3] == 0xA2)) {
     STLOG_HAL_D("-> Loader V3 Mode NCI_CORE_RESET_NTF received after HW Reset");
     mFWInfo->chipHwVersion = HW_ST54L;
-    mFWInfo->chipHwRevision = 0x01;
     STLOG_HAL_D("   HwVersion = 0x%02X", mFWInfo->chipHwVersion);
+    mFWInfo->chipHwRevision = 0xFF;
+    /* HW revision could be deducted from Factory Loader version 16.17.18 */
+    // 54L : rev AY: 010301  rev B: 010102
+    // if (pdata[16] == 0x01 && pdata[17] == 0x03 && pdata[18] == 0x01) {
+    //   mFWInfo->chipHwRevision = 0x01;
+    // } else if (pdata[16] == 0x01 && pdata[17] == 0x01 && pdata[18] == 0x02) {
+    //   mFWInfo->chipHwRevision = 0x02;
+    // }
+    // STLOG_HAL_D("   HwRevision = 0x%02X", mFWInfo->chipHwRevision);
+
     mFWInfo->chipFwVersion = 0;  // make sure FW will be updated.
     /* retrieve Production type* from NCI_CORE_RESET_NTF */
     mFWInfo->chipProdType = GetProdType(&pdata[44]);
@@ -607,7 +617,7 @@ uint8_t ft_cmd_HwReset(uint8_t *pdata, uint8_t *clf_mode, bool force) {
       loader_patch = loader_RA7_patch;
       loader_patch_size_tab = loader_RA7_patch_size_tab;
     }
-  }  // no loader update for ST54J at the moment.
+  }  // no loader update for ST54J or ST54L at the moment.
 
   // If the firmware file is not already open, try to read it/
   if ((mFwFileBin == NULL) && (mCustomFileTxt == NULL) &&
@@ -633,22 +643,39 @@ uint8_t ft_cmd_HwReset(uint8_t *pdata, uint8_t *clf_mode, bool force) {
     return (*clf_mode == FT_CLF_MODE_ROUTER) ? FU_NOTHING_TO_DO : FU_ERROR;
   }
 
-  // If we are in loader mode and no FW available, error
-  if ((*clf_mode == FT_CLF_MODE_LOADER) &&
-      ((mFwFileBin == NULL) ||
-       (mFWInfo->chipHwVersion != mFWInfo->fileHwVersion) ||
-       (mFWInfo->chipAuthKeyId != mFWInfo->fileAuthKeyId))) {
-    STLOG_HAL_D("Loader mode and no applicable FW patch available.\n");
-    return FU_ERROR;
-  }
+  if (mFWInfo->chipHwVersion == HW_ST54L) {
+    // If we are in loader mode and no FW available, error
+    if ((*clf_mode == FT_CLF_MODE_LOADER) &&
+        ((mFwFileBin == NULL) ||
+         (mFWInfo->chipHwVersion != mFWInfo->fileHwVersion))) {
+      STLOG_HAL_D("Loader mode and no applicable FW patch available.\n");
+      return FU_ERROR;
+    }
 
-  // Should we update the firmware ?
-  if ((mFwFileBin != NULL) &&
-      (mFWInfo->chipHwVersion == mFWInfo->fileHwVersion) &&
-      (mFWInfo->chipAuthKeyId == mFWInfo->fileAuthKeyId) &&
-      (force || (mFWInfo->fileFwVersion != mFWInfo->chipFwVersion))) {
-    STLOG_HAL_D("FW patch needs to be applied.\n");
-    return FU_UPDATE_FW;
+    // Should we update the firmware ?
+    if ((mFwFileBin != NULL) &&
+        (mFWInfo->chipHwVersion == mFWInfo->fileHwVersion) &&
+        (force || (mFWInfo->fileFwVersion != mFWInfo->chipFwVersion))) {
+      STLOG_HAL_D("FW patch needs to be applied.\n");
+      return FU_UPDATE_FW;
+    }
+  } else {
+    // If we are in loader mode and no FW available, error
+    if ((*clf_mode == FT_CLF_MODE_LOADER) &&
+        ((mFwFileBin == NULL) ||
+         (mFWInfo->chipHwVersion != mFWInfo->fileHwVersion) ||
+         (mFWInfo->chipAuthKeyId != mFWInfo->fileAuthKeyId))) {
+      STLOG_HAL_D("Loader mode and no applicable FW patch available.\n");
+      return FU_ERROR;
+    }
+
+    if ((mFwFileBin != NULL) &&
+        (mFWInfo->chipHwVersion == mFWInfo->fileHwVersion) &&
+        (mFWInfo->chipAuthKeyId == mFWInfo->fileAuthKeyId) &&
+        (force || (mFWInfo->fileFwVersion != mFWInfo->chipFwVersion))) {
+      STLOG_HAL_D("FW patch needs to be applied.\n");
+      return FU_UPDATE_FW;
+    }
   }
 
   // Should we update the config ?

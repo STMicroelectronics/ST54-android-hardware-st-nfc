@@ -15,14 +15,38 @@
  */
 
 #include <android-base/logging.h>
+#include <android-base/properties.h>
 #include <android/binder_manager.h>
 #include <android/binder_process.h>
+#include <dlfcn.h>
 
 #include "Nfc.h"
+
+#define VENDOR_LIB_PATH "/vendor/lib64/"
+#define VENDOR_LIB_EXT ".so"
+
 using ::aidl::android::hardware::nfc::Nfc;
 
+typedef int (*STEseReset)(void);
+
 int main() {
-  LOG(INFO) << "NFC HAL starting up";
+  LOG(INFO) << "NFC AIDL HAL Service is starting up";
+
+  std::string valueStr =
+      android::base::GetProperty("persist.vendor.nfc.streset", "");
+  if (valueStr.length() > 0) {
+    valueStr = VENDOR_LIB_PATH + valueStr + VENDOR_LIB_EXT;
+    void* stdll = dlopen(valueStr.c_str(), RTLD_NOW);
+    if (stdll) {
+      LOG(INFO) << "ST NFC HAL STReset starting.";
+      STEseReset fn = (STEseReset)dlsym(stdll, "boot_reset");
+      if (fn) {
+        int ret = fn();
+        LOG(INFO) << "STReset Result= " << ret;
+      }
+      LOG(INFO) << ("ST NFC HAL STReset Done.");
+    }
+  }
   if (!ABinderProcess_setThreadPoolMaxThreadCount(1)) {
     LOG(INFO) << "failed to set thread pool max thread count";
     return 1;

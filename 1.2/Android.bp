@@ -13,19 +13,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-cc_binary {
-name:
-  "android.hardware.nfc@1.2-service-st", defaults : ["hidl_defaults"],
-                                                    vendor : true,
-                                                    owner: "st",
-                                                                  init_rc :
-      ["android.hardware.nfc@1.2-service-st.rc"],
-      vintf_fragments: ["android.hardware.nfc@1.2-service-st.xml"],
-      relative_install_path : "hw",
-                              srcs :
-      [ "StNfcService.cpp", "Nfc.cpp", "hal_st21nfc.cc" ],
+package {
+    // http://go/android-license-faq
+    // A large-scale-change added 'default_applicable_licenses' to import
+    // the below license kinds from "vendor_st_nfc_hardware_st_nfc_license":
+    //   SPDX-license-identifier-Apache-2.0
+    default_applicable_licenses: ["vendor_st_nfc_hardware_st_nfc_license"],
+}
 
-      shared_libs : [
+cc_binary {
+    name: "android.hardware.nfc@1.2-service-st",
+    defaults: ["hidl_defaults"],
+    vendor: true,
+    owner: "st",
+    init_rc: ["android.hardware.nfc@1.2-service-st.rc"],
+    relative_install_path: "hw",
+    srcs: [
+        "StNfcService.cpp",
+        "Nfc.cpp",
+        "hal_st21nfc.cc"
+    ],
+
+    shared_libs: [
         "nfc_nci.st21nfc.st",
         "libbase",
         "libcutils",
@@ -36,5 +45,9 @@ name:
         "android.hardware.nfc@1.1",
         "android.hardware.nfc@1.2",
         "libhidlbase",
-      ],
+    ],
+
+    sanitize: {
+        memtag_heap: true,
+    },
 }

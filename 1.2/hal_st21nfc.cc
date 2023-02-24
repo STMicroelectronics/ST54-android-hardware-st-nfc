@@ -20,7 +20,8 @@
  *
  ******************************************************************************/
 
-#include <cutils/properties.h>
+#include <android-base/properties.h>
+#include <dlfcn.h>
 #include <errno.h>
 #include <hardware/nfc.h>
 #include <string.h>
@@ -31,12 +32,17 @@
 #include "halcore.h"
 #include "st21nfc_dev.h"
 
+#define VENDOR_LIB_PATH "/vendor/lib64/"
+#define VENDOR_LIB_EXT ".so"
+
 extern void HalCoreCallback(void* context, uint32_t event, const void* d,
                             size_t length);
 extern bool I2cOpenLayer(void* dev, HAL_CALLBACK callb, HALHANDLE* pHandle);
 extern void i2cSetTimeBetweenCmds(int ms);
 
-const char* halVersion = "ST21NFC HAL1.3C Version 130-20220929-22W39p0";
+typedef int (*STEseReset)(void);
+
+const char* halVersion = "ST21NFC HAL1.3C Version 130-20230215-23W07p0";
 
 uint8_t cmd_set_nfc_mode_enable[] = {0x2f, 0x02, 0x02, 0x02, 0x01};
 uint8_t hal_is_closed = 1;
@@ -444,6 +450,23 @@ int StNfc_hal_close(int nfc_mode_value) {
   if (async_callback_thread_end() != 0) {
     STLOG_HAL_E("HAL st21nfc: %s async_callback_thread_end failed", __func__);
     return -1;  // We are doomed, stop it here, NOW !
+  }
+
+  std::string valueStr =
+      android::base::GetProperty("persist.vendor.nfc.streset", "");
+  if (valueStr.length() > 0) {
+    valueStr = VENDOR_LIB_PATH + valueStr + VENDOR_LIB_EXT;
+    void* stdll = dlopen(valueStr.c_str(), RTLD_NOW);
+    if (stdll) {
+      STLOG_HAL_D("STReset Cold reset");
+      STEseReset fn = (STEseReset)dlsym(stdll, "cold_reset");
+      if (fn) {
+        int ret = fn();
+        STLOG_HAL_D("STReset Result=%d", ret);
+      }
+    } else {
+      STLOG_HAL_D("%s not found, do nothing.", valueStr.c_str());
+    }
   }
 
   STLOG_HAL_D("HAL st21nfc: %s close", __func__);
