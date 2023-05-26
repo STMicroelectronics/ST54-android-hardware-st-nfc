@@ -406,7 +406,9 @@ void I2cRecovery() {
   (void)pthread_mutex_unlock(&i2ctransport_mtx);
 }
 
-extern "C" void I2cRecoveryFactory() { I2cRecovery(); }
+extern "C" void I2cRecoveryFactory() {
+  I2cRecovery();
+}
 
 /**************************************************************************************************
  *

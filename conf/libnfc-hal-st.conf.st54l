@@ -74,7 +74,7 @@ DEVICE_HOST_ALLOW_LIST={02:C0}
 ###############################################################################
 # BAIL OUT value for P2P
 # Implements algorithm for NFC-DEP protocol priority over ISO-DEP protocol.
-POLL_BAIL_OUT_MODE=1
+POLL_BAIL_OUT_MODE=0
 
 ###############################################################################
 # Extended APDU length for ISO_DEP

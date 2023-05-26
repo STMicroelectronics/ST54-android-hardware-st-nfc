@@ -40,50 +40,47 @@ cc_library_shared{
 }
 
 cc_library_static {
-name:
-  "nfc_nci.st21nfc.st.static", defaults : ["hidl_defaults"],
-                                               vendor : true,
-                                               owner: "st",
+  name : "nfc_nci.st21nfc.st.static",
+  defaults : ["hidl_defaults"],
+  vendor : true,
+  owner: "st",
 
-                                                             cflags :
-      [
-        "-Wall",
-        "-Werror",
-        "-Wextra",
-      ],
+  cflags : [
+    "-Wall",
+    "-Werror",
+    "-Wextra",
+  ],
 
-      srcs :
-      [
-        "adaptation/android_logmsg.cpp",
-        "adaptation/config.cpp",
-        "adaptation/i2clayer.cc",
-        "hal/halcore.cc",
-        "hal_wrapper.cc",
-        "hal/hal_fd.cc",
-        "hal/hal_auth.cc",
-        "hal/loader_st21nfcd_RA7.c",
-        "hal/loader_st21nfcd_RA9.c",
-      ],
+  srcs : [
+    "adaptation/android_logmsg.cpp",
+    "adaptation/config.cpp",
+    "adaptation/i2clayer.cc",
+    "hal/halcore.cc",
+    "hal_wrapper.cc",
+    "hal/hal_fd.cc",
+    "hal/hal_auth.cc",
+    "hal/loader_st21nfcd_RA7.c",
+    "hal/loader_st21nfcd_RA9.c",
+  ],
 
-      local_include_dirs :
-      [
-        "gki/ulinux",
-        "hal",
-        "include",
-      ],
+  local_include_dirs : [
+    "gki/ulinux",
+    "hal",
+    "include",
+  ],
 
-      export_include_dirs :
-      [
-        "include",
-        "gki/ulinux",
-      ],
-      shared_libs : [
-        "libbase",
-        "libcutils",
-        "libhardware",
-        "libhardware_legacy",
-        "libhidlbase",
-        "liblog",
-        "libutils",
-      ],
+  export_include_dirs : [
+    "include",
+    "gki/ulinux",
+  ],
+
+  shared_libs : [
+    "libbase",
+    "libcutils",
+    "libhardware",
+    "libhardware_legacy",
+    "libhidlbase",
+    "liblog",
+    "libutils",
+  ],
 }

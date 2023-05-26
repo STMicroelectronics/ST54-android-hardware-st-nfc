@@ -43,7 +43,7 @@ extern void i2cSetTimeBetweenCmds(int ms);
 
 typedef int (*STEseReset)(void);
 
-const char* halVersion = "ST21NFC AIDL Version 1.0.1";
+const char* halVersion = "ST21NFC AIDL HAL Version 140-20230525-23W21p0";
 
 uint8_t cmd_set_nfc_mode_enable[] = {0x2f, 0x02, 0x02, 0x02, 0x01};
 uint8_t hal_is_closed = 1;
