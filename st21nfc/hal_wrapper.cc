@@ -65,6 +65,10 @@ static uint8_t nciPropEnableFwDbgTraces[256];
 static uint8_t nciPropEnableFwDbgTracesLen = 0;
 static uint8_t nciPropGetFwDbgTracesConfig[] = {0x2F, 0x02, 0x05, 0x03,
                                                 0x00, 0x14, 0x01, 0x00};
+
+static uint8_t nciCoreResetNtfAbnormal[] = {0x60, 0x00, 0x05, 0x00,
+                                            0x01, 0x20, 0x02, 0x00};
+
 bool mReadFwConfigDone = false;
 
 bool mHciCreditLent = false;
@@ -258,6 +262,10 @@ void hal_wrapper_send_core_config_prop(int skip) {
 int hal_wrapper_send_config(int skip) {
   if (mHalWrapperState == HAL_WRAPPER_STATE_READY) {
     hal_wrapper_send_core_config_prop(skip);
+    return 0;
+  }
+  if (mHalWrapperState == HAL_WRAPPER_STATE_OPEN_CPLT) {
+    hal_wrapper_send_core_config_prop(1);
     return 0;
   }
   // In other states, reject.
@@ -982,6 +990,20 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
             HalSendDownstreamStopTimer(mHalHandle);
             mTimerStarted = false;
           }
+        } else if ((p_data[0] != 0x40) && (p_data[0] != 0x60) &&
+                   (p_data[0] != 0x41) && (p_data[0] != 0x61) &&
+                   (p_data[0] != 0x42) && (p_data[0] != 0x62) &&
+                   (p_data[0] != 0x4f) && (p_data[0] != 0x6f) &&
+                   (p_data[0] != 0x00) && (p_data[0] != 0x10) &&
+                   (p_data[0] != 0x01) && (p_data[0] != 0x11) &&
+                   (p_data[0] != 0x02) && (p_data[0] != 0x12)) {
+          // Check if incorrect frame
+          // If so, send back fabricated CORE_RESET_NTF(abnormal) to force stack
+          // restart
+          STLOG_HAL_E("Received erroneous data, sending back CORE_RESET_NTF");
+          p_data = nciCoreResetNtfAbnormal;
+          data_len = sizeof(nciCoreResetNtfAbnormal);
+          mNfceeModeSetPendingId = false;
         }
         if (mNfceeModeSetPendingId) {
           if ((p_data[0] == 0x42) && (p_data[1] == 0x01) &&
