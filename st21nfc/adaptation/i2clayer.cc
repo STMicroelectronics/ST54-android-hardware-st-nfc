@@ -274,7 +274,11 @@ static void* I2cWorkerThread(void* arg) {
             break;
           }
           if (length <= MAX_BUFFER_SIZE) {
-            read(cmdPipe[0], buffer, length);
+            ret = read(cmdPipe[0], buffer, length);
+            if (ret != (int)length) {
+              STLOG_HAL_E("! Error, wrong read size from pipe\n");
+              break;
+            }
             i2cWrite(fidI2c, buffer, length);
           } else {
             STLOG_HAL_E(
@@ -406,9 +410,7 @@ void I2cRecovery() {
   (void)pthread_mutex_unlock(&i2ctransport_mtx);
 }
 
-extern "C" void I2cRecoveryFactory() {
-  I2cRecovery();
-}
+extern "C" void I2cRecoveryFactory() { I2cRecovery(); }
 
 /**************************************************************************************************
  *

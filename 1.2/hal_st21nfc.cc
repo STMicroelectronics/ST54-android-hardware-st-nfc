@@ -42,7 +42,7 @@ extern void i2cSetTimeBetweenCmds(int ms);
 
 typedef int (*STEseReset)(void);
 
-const char* halVersion = "ST21NFC HAL1.3C Version 140-20230525-23W21p0";
+const char* halVersion = "ST21NFC HAL1.3C Version 130-20230909-23W36p0";
 
 uint8_t cmd_set_nfc_mode_enable[] = {0x2f, 0x02, 0x02, 0x02, 0x01};
 uint8_t hal_is_closed = 1;
@@ -51,6 +51,11 @@ st21nfc_dev_t dev;
 uint8_t hal_dta_state = 0;
 int nfc_mode = 0;
 int delay_in_raw_mode = 20;
+
+// To mimic the behavior of AIDL version for developer options
+#define VERBOSE_VENDOR_LOG_PROPERTY "persist.nfc.vendor_debug_enabled"
+#define VERBOSE_VENDOR_LOG_ENABLED "true"
+#define VERBOSE_VENDOR_LOG_DISABLED "false"
 
 using namespace android::hardware::nfc::V1_1;
 using namespace android::hardware::nfc::V1_2;
@@ -299,6 +304,22 @@ int StNfc_hal_open(nfc_stack_callback_t* p_cback,
   // Initialize and get global logging level
   InitializeSTLogLevel();
 
+  // Mimic AIDL behavior, if sysprop defined.
+  {
+    bool verbose_vendor_log =
+        android::base::GetProperty(VERBOSE_VENDOR_LOG_PROPERTY, "")
+                .compare(VERBOSE_VENDOR_LOG_ENABLED)
+            ? false
+            : true;
+    hal_wrapper_setFwLogging(verbose_vendor_log);
+    if (verbose_vendor_log &&
+        hal_conf_trace_level < STNFC_TRACE_LEVEL_VERBOSE) {
+      hal_trace_level = STNFC_TRACE_LEVEL_VERBOSE;
+    } else {
+      hal_trace_level = hal_conf_trace_level;
+    }
+  }
+
   if ((hal_is_closed || !async_callback_data.thread_running) &&
       (async_callback_thread_start() != 0)) {
     dev.p_cback(HAL_NFC_OPEN_CPLT_EVT, HAL_NFC_STATUS_FAILED);
@@ -530,7 +551,7 @@ void StNfc_hal_getConfig(android::hardware::nfc::V1_1::NfcConfig& config) {
   }
 
   if (GetNumValue(NAME_ISO_DEP_MAX_TRANSCEIVE, &num, sizeof(num))) {
-    config.maxIsoDepTransceiveLength = (int)num;
+    config.maxIsoDepTransceiveLength = (uint32_t)num;
   }
   if (GetNumValue(NAME_DEFAULT_OFFHOST_ROUTE, &num, sizeof(num))) {
     config.defaultOffHostRoute = num;

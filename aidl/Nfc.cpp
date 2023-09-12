@@ -47,6 +47,7 @@ void OnDeath(void* cookie) {
       LOG(INFO) << __func__ << " Nfc service has died";
       pthread_mutex_unlock(&mLockOpenClose);
       mCookie->nfc->close(NfcCloseType::DISABLE);
+      return;
     }
   }
   pthread_mutex_unlock(&mLockOpenClose);

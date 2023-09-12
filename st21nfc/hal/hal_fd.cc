@@ -416,7 +416,10 @@ static void hal_fd_load_files() {
         mCustomFileTxt = NULL;
       }
     } else if (fwConfName[strlen(fwConfName) - 1] == 'n') {
-      fread(mBinData, sizeof(uint8_t), 2, mCustomFileBin);
+      int ret = fread(mBinData, sizeof(uint8_t), 2, mCustomFileBin);
+      if (ret != 2) {
+        STLOG_HAL_E("%s Wrong read nb for CRC\n", __func__);
+      }
       mFWInfo->fileCustVersion = mBinData[0] << 8 | mBinData[1];
       STLOG_HAL_D("-> bin configuration CRC 0x%04X \n",
                   mFWInfo->fileCustVersion);
