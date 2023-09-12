@@ -99,5 +99,6 @@ bool HalSendDownstreamStopTimer(HALHANDLE hHAL);
 bool HalSendUpstream(HALHANDLE hHAL, const uint8_t* data, size_t size);
 
 void hal_wrapper_set_state(hal_wrapper_state_e new_wrapper_state);
+void hal_wrapper_setFwLogging(bool enable);
 void I2cResetPulse();
 #endif

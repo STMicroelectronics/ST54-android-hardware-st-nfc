@@ -18,6 +18,9 @@ NFC_DEBUG_ENABLED=1
 #  use value 5 to enable CLT mode logging -- for debug only.
 STNFC_FW_DEBUG_ENABLED=1
 
+# STNFC_FW_SWP_LOG_SIZE=30
+# STNFC_FW_RF_LOG_SIZE=15
+
 ###############################################################################
 # File used for NFA storage
 NFA_STORAGE="/data/nfc"

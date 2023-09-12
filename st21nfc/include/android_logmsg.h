@@ -33,6 +33,7 @@ extern "C" {
 #define HAL_LOG_TAG "StNfcHal"
 
 extern unsigned char hal_trace_level;
+extern unsigned char hal_conf_trace_level;
 extern int GetNumValue(const char* name, void* p_value, unsigned long len);
 extern int GetByteArrayValue(const char* name, char* pValue, long bufflen,
                              long* len);
@@ -53,6 +54,8 @@ extern char config_name_suffix[MAX_DATA_CONFIG_PATH_LEN];
 #define NAME_STNFC_FW_DEBUG_ENABLED "STNFC_FW_DEBUG_ENABLED"
 #define NAME_CORE_CONF_PROP "CORE_CONF_PROP"
 #define NAME_NDEF_NFCEE_ENABLE "NDEF_NFCEE_ENABLE"
+#define NAME_STNFC_FW_SWP_LOG_SIZE "STNFC_FW_SWP_LOG_SIZE"
+#define NAME_STNFC_FW_RF_LOG_SIZE "STNFC_FW_RF_LOG_SIZE"
 
 /* #######################
  * Set the logging level

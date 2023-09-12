@@ -69,6 +69,8 @@ static uint8_t nciPropGetFwDbgTracesConfig[] = {0x2F, 0x02, 0x05, 0x03,
 static uint8_t nciCoreResetNtfAbnormal[] = {0x60, 0x00, 0x05, 0x00,
                                             0x01, 0x20, 0x02, 0x00};
 
+static bool isDebuggable;
+
 bool mReadFwConfigDone = false;
 
 bool mHciCreditLent = false;
@@ -81,6 +83,8 @@ bool mFwLogsUnblocked = false;
 bool isTimeout = false;
 int recoveryCount = 0;
 int const recoveryMax = 3;
+
+static bool sEnableFwLog = false;
 
 void wait_ready() {
   pthread_mutex_lock(&mutex);
@@ -148,6 +152,7 @@ bool hal_wrapper_open(st21nfc_dev_t* dev, nfc_stack_callback_t* p_cback,
     return -1;  // We are doomed, stop it here, NOW !
   }
 
+  isDebuggable = property_get_int32("ro.debuggable", 0);
   mHalHandle = *pHandle;
 
   STLOG_HAL_V("%s Start Timer", __func__);
@@ -313,6 +318,8 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
   uint8_t coreResetCmd[] = {0x20, 0x00, 0x01, 0x01};
   unsigned long num = 0;
   int modifyNdefNfcee = 0;
+  unsigned long swp_log = 0;
+  unsigned long rf_log = 0;
 
   if ((mFwLogsUnblocked == false) && (p_data[0] == 0x6f) &&
       (p_data[1] == 0x02)) {
@@ -678,14 +685,51 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
               case HAL_WRAPPER_CONFSUBSTATE_LOGGING_CONFIG_READING:  // LOGGING
                                                                      // was read
               {
+                bool firmware_debug_enabled = property_get_int32(
+                    "persist.vendor.nfc.firmware_debug_enabled", 0);
+
                 if (GetNumValue(NAME_STNFC_FW_DEBUG_ENABLED, &num,
-                                sizeof(num))) {
+                                sizeof(num)) ||
+                    isDebuggable || sEnableFwLog) {
+                  if ((firmware_debug_enabled || sEnableFwLog) && (num == 0)) {
+                    num = 1;
+                    swp_log = 30;
+                    rf_log = 15;
+                  }
+
+                  if (num != 0) {
+                    if (!GetNumValue(NAME_STNFC_FW_SWP_LOG_SIZE, &swp_log,
+                                     sizeof(swp_log))) {
+                      swp_log = 30;
+                    }
+                    if (!GetNumValue(NAME_STNFC_FW_RF_LOG_SIZE, &rf_log,
+                                     sizeof(rf_log))) {
+                      rf_log = 15;
+                    }
+
+                    // limit swp and rf payload length between 4 and 30.
+                    if (swp_log > 30)
+                      swp_log = 30;
+                    else if (swp_log < 4)
+                      swp_log = 4;
+
+                    if (rf_log > 30)
+                      rf_log = 30;
+                    else if (rf_log < 4)
+                      rf_log = 4;
+
+                  } else {
+                    rf_log = p_data[15];
+                    swp_log = p_data[17];
+                  }
+
                   if (((num != 0) && (p_data[7] == 0)) ||
                       ((num == 0) && (p_data[7] != 0)) ||
                       ((num & 0x02) && (p_data[13] == 0)) ||
                       (((num & 0x02) == 0) && (p_data[13] == 0x01)) ||
                       ((num & 0x04) && (p_data[28] == 0)) ||
-                      (((num & 0x04) == 0) && (p_data[28] == 0x01))) {
+                      (((num & 0x04) == 0) && (p_data[28] == 0x01)) ||
+                      (rf_log != p_data[15]) || (swp_log != p_data[17])) {
                     // we need to change the config.
                     // logging_config length: p_data[6]
                     memcpy(nciPropEnableFwDbgTraces, nciHeaderPropSetConfig,
@@ -703,6 +747,9 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
                     nciPropEnableFwDbgTraces[30] =
                         nciPropEnableFwDbgTraces[67] =
                             (((num & 0x4) == 0) ? 0x00 : 0x01);
+
+                    nciPropEnableFwDbgTraces[17] = (uint8_t)rf_log;
+                    nciPropEnableFwDbgTraces[19] = (uint8_t)swp_log;
 
                     nciPropEnableFwDbgTracesLen = p_data[6] + 9;
                     mHalWrapperStateConfigChanged = true;
@@ -990,13 +1037,33 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
             HalSendDownstreamStopTimer(mHalHandle);
             mTimerStarted = false;
           }
+        } else if (data_len >= 4 && p_data[0] == 0x60 && p_data[1] == 0x07) {
+          if (p_data[3] == 0xE1) {
+            // Core Generic Error - Buffer Overflow Ntf - Restart all
+            STLOG_HAL_E("%s; Core Generic Error - restart", __func__);
+            p_data[0] = 0x60;
+            p_data[1] = 0x00;
+            p_data[2] = 0x03;
+            p_data[3] = 0xE1;
+            p_data[4] = 0x00;
+            p_data[5] = 0x00;
+            data_len = 0x6;
+          } else if (p_data[3] == 0xE6) {
+            STLOG_HAL_E("%s; Clock Error - restart", __func__);
+            // Core Generic Error
+            p_data[0] = 0x60;
+            p_data[1] = 0x00;
+            p_data[2] = 0x03;
+            p_data[3] = 0xE6;
+            p_data[4] = 0x00;
+            p_data[5] = 0x00;
+            data_len = 0x6;
+          }
         } else if ((p_data[0] != 0x40) && (p_data[0] != 0x60) &&
                    (p_data[0] != 0x41) && (p_data[0] != 0x61) &&
                    (p_data[0] != 0x42) && (p_data[0] != 0x62) &&
                    (p_data[0] != 0x4f) && (p_data[0] != 0x6f) &&
-                   (p_data[0] != 0x00) && (p_data[0] != 0x10) &&
-                   (p_data[0] != 0x01) && (p_data[0] != 0x11) &&
-                   (p_data[0] != 0x02) && (p_data[0] != 0x12)) {
+                   ((p_data[0] & 0xE0) != 0x00)) {
           // Check if incorrect frame
           // If so, send back fabricated CORE_RESET_NTF(abnormal) to force stack
           // restart
@@ -1302,4 +1369,19 @@ void hal_wrapper_set_state(hal_wrapper_state_e new_wrapper_state) {
   ALOGD("nfc_set_state %d->%d", mHalWrapperState, new_wrapper_state);
 
   mHalWrapperState = new_wrapper_state;
+}
+
+/*******************************************************************************
+ **
+ ** Function         hal_wrapper_setFwLogging
+ **
+ ** Description      Enable the FW log by hte GUI if needed.
+ **
+ ** Returns          void
+ **
+ *******************************************************************************/
+void hal_wrapper_setFwLogging(bool enable) {
+  ALOGD("%s : enable = %d", __func__, enable);
+
+  sEnableFwLog = enable;
 }
