@@ -264,12 +264,12 @@ void hal_wrapper_send_core_config_prop(int skip) {
   }
 }
 
-int hal_wrapper_send_config(int skip) {
+int hal_wrapper_send_config(int skip, bool isAidl) {
   if (mHalWrapperState == HAL_WRAPPER_STATE_READY) {
     hal_wrapper_send_core_config_prop(skip);
     return 0;
   }
-  if (mHalWrapperState == HAL_WRAPPER_STATE_OPEN_CPLT) {
+  if (isAidl && (mHalWrapperState == HAL_WRAPPER_STATE_OPEN_CPLT)) {
     hal_wrapper_send_core_config_prop(1);
     return 0;
   }
@@ -1006,6 +1006,10 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
               }
             }
           }
+        } else if (p_data[0] == 0x60 && p_data[1] == 0x00) {
+          p_data[3] = 0x0;  // if a poweron on ntf is received in
+                            // HAL_WRAPPER_STATE_READY, consider it like a
+                            // unrecoverable error.
         } else if ((p_data[0] == 0x6f) && (p_data[1] == 0x05)) {
           // start timer
           mTimerStarted = true;
@@ -1048,7 +1052,7 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
             p_data[4] = 0x00;
             p_data[5] = 0x00;
             data_len = 0x6;
-          } else if (p_data[3] == 0xE6) {
+          } else if (IS_ST21NFCD() && (p_data[3] == 0xE6)) {
             STLOG_HAL_E("%s; Clock Error - restart", __func__);
             // Core Generic Error
             p_data[0] = 0x60;

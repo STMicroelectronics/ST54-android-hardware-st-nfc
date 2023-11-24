@@ -42,7 +42,7 @@ extern void i2cSetTimeBetweenCmds(int ms);
 
 typedef int (*STEseReset)(void);
 
-const char* halVersion = "ST21NFC HAL1.3C Version 140-20230909-23W36p0";
+const char* halVersion = "ST21NFC HAL1.3C Version 140-20231112-23W45p1";
 
 uint8_t cmd_set_nfc_mode_enable[] = {0x2f, 0x02, 0x02, 0x02, 0x01};
 uint8_t hal_is_closed = 1;
@@ -75,7 +75,7 @@ static bool client_is_nci_10 = false;
 
 extern void hal_wrapper_nfceeModeSetSent(uint8_t id, uint8_t mode);
 extern void hal_wrapper_unblockFwLogs();
-extern int hal_wrapper_send_config(int skip);
+extern int hal_wrapper_send_config(int skip, bool isAidl);
 extern void hal_wrapper_factoryReset();
 
 /* Make sure to always post nfc_stack_callback_t in a separate thread.
@@ -434,7 +434,7 @@ int StNfc_hal_core_initialized(uint8_t* p_core_init_rsp_params) {
   (void)pthread_mutex_lock(&hal_mtx);
   hal_dta_state = *p_core_init_rsp_params;
 
-  ret = hal_wrapper_send_config((client_is_nci_10 == true) ? 1 : 0);
+  ret = hal_wrapper_send_config((client_is_nci_10 == true) ? 1 : 0, false);
   (void)pthread_mutex_unlock(&hal_mtx);
 
   return ret;  // return != 0 to signal ready immediate

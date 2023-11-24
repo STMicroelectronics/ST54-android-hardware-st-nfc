@@ -137,13 +137,7 @@ void HalCoreCallback(void* context, uint32_t event, const void* d,
  * @param flags Configure if debug and trace allowed, trace level
  */
 HALHANDLE HalCreate(void* context, HAL_CALLBACK callback, uint32_t flags) {
-  /*   bool halTraceMask = true;
-
-     if (flags & HAL_FLAG_NO_DEBUG) {
-         halTraceMask = false;
-     }
- */
-  STLOG_HAL_V("HalCreate enter\n");
+  STLOG_HAL_V("%s; enter", __func__);
 
   HalInstance* inst = (HalInstance*)calloc(1, sizeof(HalInstance));
 
@@ -227,7 +221,7 @@ HALHANDLE HalCreate(void* context, HAL_CALLBACK callback, uint32_t flags) {
     return NULL;
   }
 
-  STLOG_HAL_V("HalCreate exit\n");
+  STLOG_HAL_V("%s; exit", __func__);
   return (HALHANDLE)inst;
 }
 
@@ -672,7 +666,7 @@ static void* HalWorkerThread(void* arg) {
   HalInstance* inst = (HalInstance*)arg;
   inst->exitRequest = false;
 
-  STLOG_HAL_V("thread running\n");
+  STLOG_HAL_V("%s; thread running", __func__);
 
   while (!inst->exitRequest) {
     struct timespec now = HalGetTimestamp();
@@ -752,7 +746,7 @@ static void* HalWorkerThread(void* arg) {
               break;
 
             case MSG_RX_DATA:
-              STLOG_HAL_V("received new data from CLF\n");
+              STLOG_HAL_V("received new data from CLF");
               HalOnNewUpstreamFrame(inst, (unsigned char*)msg.payload,
                                     msg.length);
               break;
@@ -760,14 +754,14 @@ static void* HalWorkerThread(void* arg) {
             case MSG_TIMER_START:
               // Start timer
               HalStartTimer(inst, msg.length);
-              STLOG_HAL_D("MSG_TIMER_START \n");
+              STLOG_HAL_D("MSG_TIMER_START");
               break;
             default:
-              STLOG_HAL_E("!received unkown thread message?\n");
+              STLOG_HAL_E("!received unkown thread message?");
               break;
           }
         } else {
-          STLOG_HAL_E("!got wakeup in workerthread, but no message here? ?\n");
+          STLOG_HAL_E("!got wakeup in workerthread, but no message here? ?");
         }
       } break;
 
@@ -775,13 +769,13 @@ static void* HalWorkerThread(void* arg) {
 
         STLOG_HAL_E(
             "!Something went horribly wrong.. The semaphore wait function "
-            "failed\n");
+            "failed");
         inst->exitRequest = true;
         break;
     }
   }
 
-  STLOG_HAL_D("thread about to exit\n");
+  STLOG_HAL_D("thread about to exit");
   return NULL;
 }
 
