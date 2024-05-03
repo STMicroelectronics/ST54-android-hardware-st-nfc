@@ -26,6 +26,7 @@
 #include "android_logmsg.h"
 #include "hal_fd.h"
 #include "hal_auth.h"
+#include "hal_fwlog.h"
 #include "halcore.h"
 #include "st21nfc_dev.h"
 
@@ -37,7 +38,7 @@ extern void I2cRecovery();
 extern int i2cNfccMayUseEse(int use);
 
 static void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data);
-static void halWrapperCallback(uint8_t event, uint8_t event_status);
+void halWrapperCallback(uint8_t event, uint8_t event_status);
 
 nfc_stack_callback_t* mHalWrapperCallback = NULL;
 nfc_stack_data_callback_t* mHalWrapperDataCallback = NULL;
@@ -65,6 +66,7 @@ static uint8_t nciPropEnableFwDbgTraces[256];
 static uint8_t nciPropEnableFwDbgTracesLen = 0;
 static uint8_t nciPropGetFwDbgTracesConfig[] = {0x2F, 0x02, 0x05, 0x03,
                                                 0x00, 0x14, 0x01, 0x00};
+static uint8_t nciAndroidPassiveObserver[256];
 
 static uint8_t nciCoreResetNtfAbnormal[] = {0x60, 0x00, 0x05, 0x00,
                                             0x01, 0x20, 0x02, 0x00};
@@ -85,6 +87,8 @@ int recoveryCount = 0;
 int const recoveryMax = 3;
 
 static bool sEnableFwLog = false;
+uint8_t mObserverMode = 0;
+bool mObserverRsp = false;
 
 void wait_ready() {
   pthread_mutex_lock(&mutex);
@@ -139,6 +143,8 @@ bool hal_wrapper_open(st21nfc_dev_t* dev, nfc_stack_callback_t* p_cback,
   mNfceeModeSetPendingId = 0x00;
   mError_count = 0;
   mFwLogsUnblocked = false;
+  mObserverMode = 0;
+  mObserverRsp = false;
 
   mHalWrapperCallback = p_cback;
   mHalWrapperDataCallback = p_data_cback;
@@ -282,6 +288,13 @@ void hal_wrapper_factoryReset() {
   STLOG_HAL_V("%s - mfactoryReset = %d", __func__, mfactoryReset);
 }
 
+void hal_wrapper_set_observer_mode(uint8_t enable) {
+  mObserverMode = enable;
+  mObserverRsp = true;
+}
+
+void hal_wrapper_get_observer_mode() { mObserverRsp = true; }
+
 void hal_wrapper_update_complete() {
   STLOG_HAL_V("%s ", __func__);
   mHalWrapperState = HAL_WRAPPER_STATE_OPEN_CPLT;
@@ -320,6 +333,16 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
   int modifyNdefNfcee = 0;
   unsigned long swp_log = 0;
   unsigned long rf_log = 0;
+  int mObserverLength = 0;
+
+  if (mObserverMode && (p_data[0] == 0x6f) && (p_data[1] == 0x02)) {
+    // Firmware logs must not be formatted before sending to upper layer.
+    if ((mObserverLength = notifyPollingLoopFrames(
+             p_data, data_len, nciAndroidPassiveObserver)) > 0) {
+      DispHal("RX DATA", (nciAndroidPassiveObserver), mObserverLength);
+      mHalWrapperDataCallback(mObserverLength, nciAndroidPassiveObserver);
+    }
+  }
 
   if ((mFwLogsUnblocked == false) && (p_data[0] == 0x6f) &&
       (p_data[1] == 0x02)) {
@@ -384,7 +407,7 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
               break;
 
             case FU_UPDATE_FW:
-              if (((p_data[3] == 0x01) && (p_data[8] == HW_ST54L)) ||
+              if (((p_data[3] == 0x01) && (p_data[8] >= HW_ST54L)) ||
                   ((p_data[2] == 0x41) && (p_data[3] == 0xA2))) {  // ST54L
                 FwUpdateHandler(mHalHandle, data_len, p_data);
               } else {
@@ -991,6 +1014,33 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
       break;
     case HAL_WRAPPER_STATE_READY:
       STLOG_HAL_V("%s - mHalWrapperState = HAL_WRAPPER_STATE_READY", __func__);
+      if (mObserverRsp) {
+        if ((p_data[0] == 0x40) && (p_data[1] == 0x02)) {
+          uint8_t rsp_status = p_data[3];
+          mObserverRsp = false;
+          p_data[0] = 0x4f;
+          p_data[1] = 0x0c;
+          p_data[2] = 0x02;
+          p_data[3] = 0x02;
+          p_data[4] = rsp_status;
+          data_len = 0x5;
+        } else if ((p_data[0] == 0x40) && (p_data[1] == 0x03) &&
+                   (data_len > 7)) {
+          uint8_t rsp_status = p_data[3];
+          mObserverRsp = false;
+          if (p_data[7] != mObserverMode) {
+            STLOG_HAL_E("mObserverMode got out of sync");
+            mObserverMode = p_data[7];
+          }
+          p_data[0] = 0x4f;
+          p_data[1] = 0x0c;
+          p_data[2] = 0x03;
+          p_data[3] = 0x04;
+          p_data[4] = rsp_status;
+          p_data[5] = p_data[7];
+          data_len = 0x6;
+        }
+      }
       if (!((p_data[0] == 0x60) && (p_data[3] == 0xa0))) {
         if (mHciCreditLent && (p_data[0] == 0x60) && (p_data[1] == 0x06)) {
           if (p_data[4] == 0x01) {  // HCI connection
@@ -1067,7 +1117,9 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
                    (p_data[0] != 0x41) && (p_data[0] != 0x61) &&
                    (p_data[0] != 0x42) && (p_data[0] != 0x62) &&
                    (p_data[0] != 0x4f) && (p_data[0] != 0x6f) &&
-                   ((p_data[0] & 0xE0) != 0x00)) {
+                   ((p_data[0] & 0xE0) != 0x00) &&
+                   ((p_data[2] > 1) && (p_data[3] == 0x60) &&
+                    (p_data[4] == 0x00))) {
           // Check if incorrect frame
           // If so, send back fabricated CORE_RESET_NTF(abnormal) to force stack
           // restart
@@ -1172,7 +1224,7 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
   }
 }
 
-static void halWrapperCallback(uint8_t event,
+void halWrapperCallback(uint8_t event,
                                __attribute__((unused)) uint8_t event_status) {
   uint8_t coreInitCmd[] = {0x20, 0x01, 0x02, 0x00, 0x00};
 

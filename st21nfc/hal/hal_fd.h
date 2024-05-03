@@ -45,6 +45,8 @@ typedef struct FWInfo {
 typedef enum {
   HAL_FD_STATE_AUTHENTICATE,
   HAL_FD_STATE_ERASE_FLASH,
+  HAL_LD_STATE_ERASE_FLASHNFC,
+  HAL_LD_STATE_ERASE_FLASH4,
   HAL_LD_STATE_ERASE_FLASH1,
   HAL_LD_STATE_ERASE_FLASH2,
   HAL_FD_STATE_SEND_RAW_APDU,
@@ -83,6 +85,7 @@ typedef enum {
 #define HW_NFCD 0x04
 #define HW_ST54J 0x05
 #define HW_ST54L 0x06
+#define HW_NFCL 0x07
 
 extern const int nfc_patch_cmd_nb;
 extern const char ApduAuthentRecov[24];

@@ -43,7 +43,7 @@ extern void i2cSetTimeBetweenCmds(int ms);
 
 typedef int (*STEseReset)(void);
 
-const char* halVersion = "ST21NFC AIDL HAL Version 140-20231112-23W45p1";
+const char* halVersion = "ST21NFC AIDL HAL Version 150-20240429-alpha_rc-DRAFT";
 
 uint8_t cmd_set_nfc_mode_enable[] = {0x2f, 0x02, 0x02, 0x02, 0x01};
 uint8_t hal_is_closed = 1;
@@ -68,6 +68,8 @@ extern void hal_wrapper_nfceeModeSetSent(uint8_t id, uint8_t mode);
 extern void hal_wrapper_unblockFwLogs();
 extern int hal_wrapper_send_config(int skip, bool isAidl);
 extern void hal_wrapper_factoryReset();
+extern void hal_wrapper_set_observer_mode(uint8_t enable);
+extern void hal_wrapper_get_observer_mode();
 
 /* Make sure to always post nfc_stack_callback_t in a separate thread.
 This prevents a possible deadlock in upper layer on some sequences.
@@ -325,74 +327,102 @@ int StNfc_hal_write(uint16_t data_len, const uint8_t* p_data) {
     (void)pthread_mutex_unlock(&hal_mtx);
     return ret;
   }
-  // Identify and block NCI 1.0 invalid clients such as
-  // replay_test_android.hardware.nfc_1.0_17261139999.vts.trace_default
-  {
-    uint8_t CORE_INIT_CMD_NCI1[] = {0x20, 0x01, 0x00};
-    if (data_len == sizeof(CORE_INIT_CMD_NCI1) &&
-        !memcmp(p_data, CORE_INIT_CMD_NCI1, data_len)) {
-      STLOG_HAL_W(
-          "NFC-NCI HAL: %s  Detected NCI 1.0 command, stop forwarding to CLF",
-          __func__);
-      client_is_nci_10 = true;
-    }
-  }
-  if (client_is_nci_10 == true) {
-    STLOG_HAL_D("NFC-NCI HAL: %s  frame ignored (NCI1.0 detected)", __func__);
-    (void)pthread_mutex_unlock(&hal_mtx);
-    return 0;
-  }
 
-  // Identify an NFCEE_MODE_SET command for eSE (id 82 or 86)
-  {
-    uint8_t NFCEE_MODE_SET_PREFIX[] = {0x22, 0x01, 0x02};
-    if (data_len == 5 &&
-        !memcmp(p_data, NFCEE_MODE_SET_PREFIX, sizeof(NFCEE_MODE_SET_PREFIX))) {
-      if (p_data[3] == 0x82 || p_data[3] == 0x86) {
-        hal_wrapper_nfceeModeSetSent(p_data[3], p_data[4]);
+  uint8_t NCI_ANDROID_PASSIVE_OBSERVER_PREFIX[] = {0x2f, 0x0c, 0x02, 0x02};
+  uint8_t NCI_QUERY_ANDROID_PASSIVE_OBSERVER_PREFIX[] = {0x2f, 0x0c, 0x01, 0x4};
+  if (data_len == 4 &&
+      !memcmp(p_data, NCI_QUERY_ANDROID_PASSIVE_OBSERVER_PREFIX,
+              sizeof(NCI_QUERY_ANDROID_PASSIVE_OBSERVER_PREFIX))) {
+    uint8_t CORE_GET_CONFIG_OBSERVER[5] = {0x20, 0x03, 0x02, 0x01, 0xa3};
+    hal_wrapper_get_observer_mode();
+    if (!HalSendDownstream(dev.hHAL, CORE_GET_CONFIG_OBSERVER, 5)) {
+      STLOG_HAL_E("HAL st21nfc %s  SendDownstream failed", __func__);
+      (void)pthread_mutex_unlock(&hal_mtx);
+      return 0;
+    }
+  } else if (data_len == 5 &&
+             !memcmp(p_data, NCI_ANDROID_PASSIVE_OBSERVER_PREFIX,
+                     sizeof(NCI_ANDROID_PASSIVE_OBSERVER_PREFIX))) {
+    uint8_t CORE_SET_CONFIG_OBSERVER[7] = {0x20, 0x02, 0x04,     0x01,
+                                           0xa3, 0x01, p_data[4]};
+
+    hal_wrapper_set_observer_mode(p_data[4]);
+    if (!HalSendDownstream(dev.hHAL, CORE_SET_CONFIG_OBSERVER, 7)) {
+      STLOG_HAL_E("HAL st21nfc %s  SendDownstream failed", __func__);
+      (void)pthread_mutex_unlock(&hal_mtx);
+      return 0;
+    }
+  } else {
+    // Identify and block NCI 1.0 invalid clients such as
+    // replay_test_android.hardware.nfc_1.0_17261139999.vts.trace_default
+    {
+      uint8_t CORE_INIT_CMD_NCI1[] = {0x20, 0x01, 0x00};
+      if (data_len == sizeof(CORE_INIT_CMD_NCI1) &&
+          !memcmp(p_data, CORE_INIT_CMD_NCI1, data_len)) {
+        STLOG_HAL_W(
+            "NFC-NCI HAL: %s  Detected NCI 1.0 command, stop forwarding to "
+            "CLF",
+            __func__);
+        client_is_nci_10 = true;
       }
     }
-  }
+    if (client_is_nci_10 == true) {
+      STLOG_HAL_D("NFC-NCI HAL: %s  frame ignored (NCI1.0 detected)", __func__);
+      (void)pthread_mutex_unlock(&hal_mtx);
+      return 0;
+    }
 
-  // entering RAW mode ?
-  {
-#define PROP_CTRL_RF_RAW_MODE_CMD 0x13
-    uint8_t ENTER_RAW_MODE_PREFIX[] = {0x2f, 0x02, 0x02,
-                                       PROP_CTRL_RF_RAW_MODE_CMD};
-    if (data_len == 5 &&
-        !memcmp(p_data, ENTER_RAW_MODE_PREFIX, sizeof(ENTER_RAW_MODE_PREFIX))) {
-      if (p_data[4] == 0x01) {
-        // Limit the rate
-        unsigned long num;
-        if (GetNumValue(NAME_STNFC_CMD_DELAY_IN_RAWMODE_MS, &num,
-                        sizeof(num))) {
-          delay_in_raw_mode = (int)num;
+    // Identify an NFCEE_MODE_SET command for eSE (id 82 or 86)
+    {
+      uint8_t NFCEE_MODE_SET_PREFIX[] = {0x22, 0x01, 0x02};
+      if (data_len == 5 && !memcmp(p_data, NFCEE_MODE_SET_PREFIX,
+                                   sizeof(NFCEE_MODE_SET_PREFIX))) {
+        if (p_data[3] == 0x82 || p_data[3] == 0x86) {
+          hal_wrapper_nfceeModeSetSent(p_data[3], p_data[4]);
         }
-        i2cSetTimeBetweenCmds(delay_in_raw_mode);
-
-      } else {
-        // remove the limit
-        i2cSetTimeBetweenCmds(0);
       }
     }
-  }
 
-  // Identify if ST stack is the client by matching the RF_FIELD_INFO param
-  // set during the initialization.
-  {
-    uint8_t RF_FIELD_INFO_SET_PREFIX[] = {0x20, 0x02, 0x04, 0x01,
-                                          0x80, 0x01, 0x01};
-    if (data_len == sizeof(RF_FIELD_INFO_SET_PREFIX) &&
-        !memcmp(p_data, RF_FIELD_INFO_SET_PREFIX,
-                sizeof(RF_FIELD_INFO_SET_PREFIX))) {
-      hal_wrapper_unblockFwLogs();
+    // entering RAW mode ?
+    {
+#define PROP_CTRL_RF_RAW_MODE_CMD 0x13
+      uint8_t ENTER_RAW_MODE_PREFIX[] = {0x2f, 0x02, 0x02,
+                                         PROP_CTRL_RF_RAW_MODE_CMD};
+      if (data_len == 5 && !memcmp(p_data, ENTER_RAW_MODE_PREFIX,
+                                   sizeof(ENTER_RAW_MODE_PREFIX))) {
+        if (p_data[4] == 0x01) {
+          // Limit the rate
+          unsigned long num;
+          if (GetNumValue(NAME_STNFC_CMD_DELAY_IN_RAWMODE_MS, &num,
+                          sizeof(num))) {
+            delay_in_raw_mode = (int)num;
+          }
+          i2cSetTimeBetweenCmds(delay_in_raw_mode);
+
+        } else {
+          // remove the limit
+          i2cSetTimeBetweenCmds(0);
+        }
+      }
     }
-  }
 
-  if (!HalSendDownstream(dev.hHAL, p_data, data_len)) {
-    STLOG_HAL_E("HAL st21nfc %s  SendDownstream failed", __func__);
-    (void)pthread_mutex_unlock(&hal_mtx);
-    return 0;
+    // Identify if ST stack is the client by matching the RF_FIELD_INFO param
+    // set during the initialization.
+    {
+      uint8_t RF_FIELD_INFO_SET_PREFIX[] = {0x20, 0x02, 0x04, 0x01,
+                                            0x80, 0x01, 0x01};
+      if (data_len == sizeof(RF_FIELD_INFO_SET_PREFIX) &&
+          !memcmp(p_data, RF_FIELD_INFO_SET_PREFIX,
+                  sizeof(RF_FIELD_INFO_SET_PREFIX))) {
+        hal_wrapper_unblockFwLogs();
+      }
+    }
+
+    if (!HalSendDownstream(dev.hHAL, p_data, data_len)) {
+      STLOG_HAL_E("HAL st21nfc %s  SendDownstream failed", __func__);
+      (void)pthread_mutex_unlock(&hal_mtx);
+      return 0;
+    }
   }
   (void)pthread_mutex_unlock(&hal_mtx);
 
