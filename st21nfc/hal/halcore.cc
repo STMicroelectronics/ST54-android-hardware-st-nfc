@@ -26,15 +26,28 @@
 #include "android_logmsg.h"
 #include "halcore_private.h"
 #include "st21nfc_dev.h"
+#include "hal_fd.h"
 
 extern int I2cWriteCmd(const uint8_t* x, size_t len);
 extern void DispHal(const char* title, const void* data, size_t length);
+extern void HalReplayInit(HalInstance* inst);
+extern void HalReplayClose();
+extern void HalReplayTxData(uint8_t* data, int length);
 
 extern uint32_t ScrProtocolTraceFlag;  // = SCR_PROTO_TRACE_ALL;
 extern pthread_mutex_t i2cguard_write;
+extern bool mHalReplay;
 
 // HAL WRAPPER
 static void HalStopTimer(HalInstance* inst);
+
+uint8_t NCI_ANDROID_GET_CAPS[] = {0x2f, 0x0c, 0x01, 0x0};
+uint8_t NCI_ANDROID_GET_CAPS_RSP[] = {
+    0x4f, 0x0c, 0x0e, 0x00, 0x00, 0x00,
+    0x00, 0x03, 0x00, 0x01, 0x01,  // Passive Observe mode
+    0x01, 0x01, 0x01,              // Polling frame ntf
+    0x03, 0x01, 0x00               // Autotransact polling loop filter
+};
 
 /**************************************************************************************************
  *
@@ -81,18 +94,29 @@ void HalCoreCallback(void* context, uint32_t event, const void* d,
   switch (event) {
     case HAL_EVENT_DSWRITE:
       STLOG_HAL_V("!! got event HAL_EVENT_DSWRITE for %zu bytes\n", length);
-      DispHal("TX DATA", (data), length);
-
-      // Send write command to IO thread
-      cmd = 'W';
-      (void)pthread_mutex_lock(&i2cguard_write);
-      I2cWriteCmd(&cmd, sizeof(cmd));
-      I2cWriteCmd((const uint8_t*)&length, sizeof(length));
-      I2cWriteCmd(data, length);
-      (void)pthread_mutex_unlock(&i2cguard_write);
+      if (!mHalReplay) {
+        if (length == 4 &&
+            !memcmp(data, NCI_ANDROID_GET_CAPS, sizeof(NCI_ANDROID_GET_CAPS))) {
+          DispHal("TX DATA HAL", (data), length);
+          dev->p_data_cback(NCI_ANDROID_GET_CAPS_RSP[2] + 3,
+                            NCI_ANDROID_GET_CAPS_RSP);
+        } else {
+          DispHal("TX DATA", (data), length);
+          // Send write command to IO thread
+          cmd = 'W';
+          (void)pthread_mutex_lock(&i2cguard_write);
+          I2cWriteCmd(&cmd, sizeof(cmd));
+          I2cWriteCmd((const uint8_t*)&length, sizeof(length));
+          I2cWriteCmd(data, length);
+          (void)pthread_mutex_unlock(&i2cguard_write);
+        }
+      }
       break;
 
     case HAL_EVENT_DATAIND:
+      if (mHalReplay) {
+        DispHal("RX DATA HAL", data, length);
+      }
       STLOG_HAL_V("!! got event HAL_EVENT_DATAIND for %zu bytes\n", length);
 
       if ((length >= 3) && (data[2] != (length - 3))) {
@@ -116,9 +140,11 @@ void HalCoreCallback(void* context, uint32_t event, const void* d,
 
       // Write terminate command
       cmd = 'X';
-      (void)pthread_mutex_lock(&i2cguard_write);
-      I2cWriteCmd(&cmd, sizeof(cmd));
-      (void)pthread_mutex_unlock(&i2cguard_write);
+      if (!mHalReplay) {
+        (void)pthread_mutex_lock(&i2cguard_write);
+        I2cWriteCmd(&cmd, sizeof(cmd));
+        (void)pthread_mutex_unlock(&i2cguard_write);
+      }
       break;
 
     case HAL_EVENT_TIMER_TIMEOUT:
@@ -221,6 +247,9 @@ HALHANDLE HalCreate(void* context, HAL_CALLBACK callback, uint32_t flags) {
     return NULL;
   }
 
+  if (mHalReplay) {
+    HalReplayInit(inst);
+  }
   STLOG_HAL_V("%s; exit", __func__);
   return (HALHANDLE)inst;
 }
@@ -255,6 +284,9 @@ void HalDestroy(HALHANDLE hHAL) {
   free(inst->bufferData);
   free(inst);
 
+  if (mHalReplay) {
+    HalReplayClose();
+  }
   STLOG_HAL_V("HalDestroy done\n");
 }
 
@@ -636,9 +668,13 @@ static void Hal_event_handler(HalInstance* inst, HalEvent e) {
     case EVT_TX_DATA:
       // NCI data arrived from stack
       // Send data
-      inst->callback(inst->context, HAL_EVENT_DSWRITE, inst->nciBuffer->data,
-                     inst->nciBuffer->length);
+      if (!mHalReplay) {
+        inst->callback(inst->context, HAL_EVENT_DSWRITE, inst->nciBuffer->data,
+                       inst->nciBuffer->length);
 
+      } else {
+        HalReplayTxData(inst->nciBuffer->data, inst->nciBuffer->length);
+      }
       // Free the buffer
       HalFreeBuffer(inst, inst->nciBuffer);
       inst->nciBuffer = 0;

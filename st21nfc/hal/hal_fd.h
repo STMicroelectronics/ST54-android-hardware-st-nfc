@@ -45,6 +45,7 @@ typedef struct FWInfo {
 typedef enum {
   HAL_FD_STATE_AUTHENTICATE,
   HAL_FD_STATE_ERASE_FLASH,
+  HAL_FD_STATE_ERASE_FLASH4,
   HAL_LD_STATE_ERASE_FLASHNFC,
   HAL_LD_STATE_ERASE_FLASH4,
   HAL_LD_STATE_ERASE_FLASH1,
@@ -79,8 +80,6 @@ typedef enum {
 #define FU_ERROR 4
 #define FU_AUTH 5
 
-#define MAX_BUFFER_SIZE 300
-
 // HwVersion :
 #define HW_NFCD 0x04
 #define HW_ST54J 0x05
@@ -103,4 +102,5 @@ void LdUpdateHandler(HALHANDLE mHalHandle, uint16_t data_len, uint8_t* p_data);
 void ApplyCustomParamHandler(HALHANDLE mHalHandle, uint16_t data_len,
                              uint8_t* p_data);
 void resetHandlerState();
+FWInfo* hal_fd_getFwInfo();
 #endif /* HAL_FD_H_ */

@@ -26,6 +26,7 @@
 #include <string.h>
 #include "android_logmsg.h"
 #include "halcore.h"
+#include "hal_fd.h"
 
 extern void DispHal(const char* title, const void* data, size_t length);
 
@@ -70,9 +71,19 @@ uint8_t handlePollingLoopData(uint8_t format, uint8_t* tlvBuffer,
     case T_CERx: {
       STLOG_HAL_D("%s - T_CERx", __func__);
       int tlv_size = tlvBuffer[1] - 2;
-      if ((tlv_size < 9) || (tlvBuffer[5] != 0)) {
+      if (tlv_size < 9) {
         tlv_size = 8;
       }
+
+      // work-around type-A short frame notification bug
+      if (hal_fd_getFwInfo()->chipHwVersion == HW_ST54J &&
+          (tlvBuffer[2] & 0xF) == 0x01 &&  // short frame
+          tlvBuffer[5] == 0x00 &&          // no error
+          tlvBuffer[6] == 0x0F             // incorrect real size
+      ) {
+        tlv_size = 9;
+      }
+
       value_len = tlv_size - 3;
       *NewTlv = (uint8_t*)malloc(tlv_size * sizeof(uint8_t));
       uint8_t gain;
@@ -108,6 +119,10 @@ uint8_t handlePollingLoopData(uint8_t format, uint8_t* tlvBuffer,
         default:
           type = TYPE_UNKNOWN;
           break;
+      }
+      if (tlvBuffer[5] != 0) {
+        // if error flag is set, consider the frame as unknown.
+        type = TYPE_UNKNOWN;
       }
       (*NewTlv)[0] = type;
       (*NewTlv)[1] = flag;

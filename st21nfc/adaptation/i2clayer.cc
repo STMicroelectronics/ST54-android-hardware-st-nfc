@@ -17,6 +17,8 @@
  *
  ----------------------------------------------------------------------*/
 
+#include <android-base/properties.h>
+#include <ctype.h>
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -67,6 +69,11 @@ static int is4bytesheader = 0;
 static bool recovery_mode = false;
 static bool resetPulseDone = false;
 
+#define MAX_NB_READ_ERROR 10
+static int readErrorCnt = 0;
+const uint8_t dummy_reset_ntf[] = {0x60, 0x00, 0x05, 0x00,
+                                   0x00, 0x20, 0x00, 0x00};
+
 static struct pollfd event_table[2];
 static pthread_t threadHandle = (pthread_t)NULL;
 pthread_mutex_t i2ctransport_mtx = PTHREAD_MUTEX_INITIALIZER;
@@ -86,6 +93,8 @@ static int i2cRead(int fid, uint8_t* pvBuffer, int length);
 static int i2cGetGPIOState(int fid);
 static int i2cWrite(int fd, const uint8_t* pvBuffer, int length);
 
+extern bool mHalReplay;
+
 /**************************************************************************************************
  *
  *                                      Public API Entry-Points
@@ -102,6 +111,8 @@ static void* I2cWorkerThread(void* arg) {
   HALHANDLE hHAL = (HALHANDLE)arg;
   STLOG_HAL_D("echo thread started...\n");
   bool readOk = false;
+
+  readErrorCnt = 0;
 
   do {
     event_table[0].fd = fidI2c;
@@ -220,6 +231,8 @@ static void* I2cWorkerThread(void* arg) {
               if (bytesRead == remaining - extra) {
                 DispHal("RX DATA", buffer, 3 + extra + bytesRead);
                 HalSendUpstream(hHAL, buffer, 3 + extra + bytesRead);
+                // We managed to read data, clear error count
+                readErrorCnt = 0;
               } else {
                 readOk = false;
                 STLOG_HAL_E(
@@ -236,6 +249,12 @@ static void* I2cWorkerThread(void* arg) {
 
           } else {
             STLOG_HAL_E("! didn't read %d requested bytes from i2c\n", hdrsz);
+            readErrorCnt++;
+            if (readErrorCnt > MAX_NB_READ_ERROR) {
+              STLOG_HAL_E(
+                  "! Max number of I2C errors reached, asking for restart\n");
+              HalSendUpstream(hHAL, dummy_reset_ntf, sizeof(dummy_reset_ntf));
+            }
           }
 
           readOk = false;
@@ -329,6 +348,24 @@ int I2cWriteCmd(const uint8_t* x, size_t len) {
 bool I2cOpenLayer(void* dev, HAL_CALLBACK callb, HALHANDLE* pHandle) {
   uint32_t NoDbgFlag = HAL_FLAG_DEBUG;
   uint8_t DummyByte;
+  mHalReplay =
+      android::base::GetProperty("persist.vendor.nfc.st_hal_replay", "")
+              .compare("true")
+          ? false
+          : true;
+
+  if (mHalReplay) {
+    STLOG_HAL_D("%s; HAL REPLAY active", __func__);
+    mHalReplay = true;
+
+    *pHandle = HalCreate(dev, callb, NoDbgFlag);
+
+    if (!*pHandle) {
+      STLOG_HAL_E("failed to create NFC HAL Core \n");
+      return false;
+    }
+    return true;
+  }
   (void)pthread_mutex_lock(&i2ctransport_mtx);
   fidI2c = open("/dev/st21nfc", O_RDWR);
   if (fidI2c < 0) {

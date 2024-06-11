@@ -50,4 +50,8 @@ cc_binary {
     sanitize: {
         memtag_heap: true,
     },
+
+    arch: {
+        arm: { cflags: ["-DST_LIB_32"] },
+    }
 }

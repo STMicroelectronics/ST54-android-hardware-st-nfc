@@ -89,6 +89,7 @@ int const recoveryMax = 3;
 static bool sEnableFwLog = false;
 uint8_t mObserverMode = 0;
 bool mObserverRsp = false;
+extern bool mHalReplay;
 
 void wait_ready() {
   pthread_mutex_lock(&mutex);
@@ -152,14 +153,14 @@ bool hal_wrapper_open(st21nfc_dev_t* dev, nfc_stack_callback_t* p_cback,
   dev->p_data_cback = halWrapperDataCallback;
   dev->p_cback = halWrapperCallback;
 
-  result = I2cOpenLayer(dev, HalCoreCallback, pHandle);
+  result = I2cOpenLayer(dev, HalCoreCallback, &mHalHandle);
 
-  if (!result || !(*pHandle)) {
+  if (!result || !(mHalHandle)) {
     return -1;  // We are doomed, stop it here, NOW !
   }
 
   isDebuggable = property_get_int32("ro.debuggable", 0);
-  mHalHandle = *pHandle;
+  *pHandle = mHalHandle;
 
   STLOG_HAL_V("%s Start Timer", __func__);
   HalSendDownstreamTimer(mHalHandle, 10000);
@@ -339,9 +340,12 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
     // Firmware logs must not be formatted before sending to upper layer.
     if ((mObserverLength = notifyPollingLoopFrames(
              p_data, data_len, nciAndroidPassiveObserver)) > 0) {
-      DispHal("RX DATA", (nciAndroidPassiveObserver), mObserverLength);
+      DispHal("RX DATA HAL", (nciAndroidPassiveObserver), mObserverLength);
       mHalWrapperDataCallback(mObserverLength, nciAndroidPassiveObserver);
     }
+  }
+  if ((p_data[0] == 0x4f) && (p_data[1] == 0x0c)) {
+    DispHal("RX DATA HAL", (p_data), data_len);
   }
 
   if ((mFwLogsUnblocked == false) && (p_data[0] == 0x6f) &&
@@ -359,7 +363,12 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
       STLOG_HAL_V("%s - mHalWrapperState = HAL_WRAPPER_STATE_OPEN", __func__);
 
       if ((p_data[0] == 0x60) && (p_data[1] == 0x00)) {
-        mFwUpdateTask = ft_cmd_HwReset(p_data, &mClfMode, mfactoryReset);
+        if (!mHalReplay) {
+          mFwUpdateTask = ft_cmd_HwReset(p_data, &mClfMode, mfactoryReset);
+        } else {
+          mFwUpdateTask = FU_NOTHING_TO_DO;
+          mClfMode = FT_CLF_MODE_ROUTER;
+        }
         mfactoryReset = (mFwUpdateTask == FU_UPDATE_LOADER);
         STLOG_HAL_V(
             "%s - mFwUpdateTask = %d,  mClfMode = %d,  mRetryFwDwl = %d",

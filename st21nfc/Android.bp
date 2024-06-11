@@ -66,6 +66,7 @@ cc_library_static {
     "adaptation/config.cpp",
     "adaptation/i2clayer.cc",
     "hal/halcore.cc",
+    "hal/hal_replay.cc",
     "hal_wrapper.cc",
     "hal/hal_fwlog.cc",
     "hal/hal_fd.cc",
