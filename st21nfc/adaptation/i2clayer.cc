@@ -17,6 +17,8 @@
  *
  ----------------------------------------------------------------------*/
 
+#include <android-base/properties.h>
+#include <ctype.h>
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -67,11 +69,18 @@ static int is4bytesheader = 0;
 static bool recovery_mode = false;
 static bool resetPulseDone = false;
 
+#define MAX_NB_READ_ERROR 10
+static int readErrorCnt = 0;
+const uint8_t dummy_reset_ntf[] = {0x60, 0x00, 0x05, 0x00,
+                                   0x00, 0x20, 0x00, 0x00};
+
 static struct pollfd event_table[2];
 static pthread_t threadHandle = (pthread_t)NULL;
 pthread_mutex_t i2ctransport_mtx = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t i2cguard_mtx = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t i2cguard_write = PTHREAD_MUTEX_INITIALIZER;
+bool isStopI2cThread = false;
+pthread_mutex_t i2cguard_stop = PTHREAD_MUTEX_INITIALIZER;
 
 /**************************************************************************************************
  *
@@ -85,6 +94,8 @@ static int i2cRecovery(int fid);
 static int i2cRead(int fid, uint8_t* pvBuffer, int length);
 static int i2cGetGPIOState(int fid);
 static int i2cWrite(int fd, const uint8_t* pvBuffer, int length);
+
+extern bool mHalReplay;
 
 /**************************************************************************************************
  *
@@ -102,6 +113,8 @@ static void* I2cWorkerThread(void* arg) {
   HALHANDLE hHAL = (HALHANDLE)arg;
   STLOG_HAL_D("echo thread started...\n");
   bool readOk = false;
+
+  readErrorCnt = 0;
 
   do {
     event_table[0].fd = fidI2c;
@@ -135,6 +148,7 @@ static void* I2cWorkerThread(void* arg) {
 
       uint8_t buffer[300];
       int count = 0;
+      bool isStop = false;
 
       do {
         if (!recovery_mode) {
@@ -220,6 +234,8 @@ static void* I2cWorkerThread(void* arg) {
               if (bytesRead == remaining - extra) {
                 DispHal("RX DATA", buffer, 3 + extra + bytesRead);
                 HalSendUpstream(hHAL, buffer, 3 + extra + bytesRead);
+                // We managed to read data, clear error count
+                readErrorCnt = 0;
               } else {
                 readOk = false;
                 STLOG_HAL_E(
@@ -233,16 +249,25 @@ static void* I2cWorkerThread(void* arg) {
                   "!readOk; bytesRead=%d, buffer: 0x%02x 0x%02x 0x%02x\n",
                   bytesRead, buffer[0], buffer[1], buffer[2]);
             }
-
           } else {
             STLOG_HAL_E("! didn't read %d requested bytes from i2c\n", hdrsz);
+            readErrorCnt++;
+            if (readErrorCnt > MAX_NB_READ_ERROR) {
+              STLOG_HAL_E(
+                  "! Max number of I2C errors reached, asking for restart\n");
+              HalSendUpstream(hHAL, dummy_reset_ntf, sizeof(dummy_reset_ntf));
+            }
           }
 
           readOk = false;
           memset(buffer, 0xca, sizeof(buffer));
         }
+        (void)pthread_mutex_lock(&i2cguard_stop);
+        isStop = isStopI2cThread;
+        (void)pthread_mutex_unlock(&i2cguard_stop);
+
         /* read while we have data available, up to 2 times then allow writes */
-      } while ((i2cGetGPIOState(fidI2c) == 1) && (count++ < 2));
+      } while ((i2cGetGPIOState(fidI2c) == 1) && (count++ < 2) && !isStop);
     }
 
     if (event_table[1].revents & POLLIN) {
@@ -329,6 +354,23 @@ int I2cWriteCmd(const uint8_t* x, size_t len) {
 bool I2cOpenLayer(void* dev, HAL_CALLBACK callb, HALHANDLE* pHandle) {
   uint32_t NoDbgFlag = HAL_FLAG_DEBUG;
   uint8_t DummyByte;
+  mHalReplay =
+      android::base::GetProperty("persist.vendor.nfc.st_hal_replay", "")
+              .compare("true")
+          ? false
+          : true;
+
+  if (mHalReplay) {
+    STLOG_HAL_D("%s; HAL REPLAY active", __func__);
+
+    *pHandle = HalCreate(dev, callb, NoDbgFlag);
+
+    if (!*pHandle) {
+      STLOG_HAL_E("failed to create NFC HAL Core \n");
+      return false;
+    }
+    return true;
+  }
   (void)pthread_mutex_lock(&i2ctransport_mtx);
   fidI2c = open("/dev/st21nfc", O_RDWR);
   if (fidI2c < 0) {
@@ -358,6 +400,10 @@ bool I2cOpenLayer(void* dev, HAL_CALLBACK callb, HALHANDLE* pHandle) {
 
   (void)pthread_mutex_unlock(&i2ctransport_mtx);
 
+  (void)pthread_mutex_lock(&i2cguard_stop);
+  isStopI2cThread = false;
+  (void)pthread_mutex_unlock(&i2cguard_stop);
+
   return (pthread_create(&threadHandle, NULL, I2cWorkerThread, *pHandle) == 0);
 }
 
@@ -375,6 +421,10 @@ void I2cCloseLayer() {
     (void)pthread_mutex_unlock(&i2ctransport_mtx);
     return;
   }
+
+  (void)pthread_mutex_lock(&i2cguard_stop);
+  isStopI2cThread = true;
+  (void)pthread_mutex_unlock(&i2cguard_stop);
 
   (void)pthread_mutex_lock(&i2cguard_write);
   I2cWriteCmd(&cmd, sizeof(cmd));
@@ -531,6 +581,7 @@ static int i2cWrite(int fid, const uint8_t* pvBuffer, int length) {
   int retries = 0;
   int result = 0;
   int halfsecs = 0;
+  bool isStop = false;
 
   (void)pthread_mutex_lock(&sTsLock);
   if (sMs != 0) {
@@ -563,6 +614,16 @@ redo:
       } else {
         STLOG_HAL_D("! i2cWrite!!, errno is '%s'", msg);
       }
+
+      (void)pthread_mutex_lock(&i2cguard_stop);
+      isStop = isStopI2cThread;
+      (void)pthread_mutex_unlock(&i2cguard_stop);
+
+      if (isStop) {
+        STLOG_HAL_W("Stop command awaits, exit\n");
+        return -1;
+      }
+
       usleep(4000);
       retries++;
     } else if (result > 0) {
@@ -570,6 +631,14 @@ redo:
       return result;
     } else {
       STLOG_HAL_W("write on i2c failed, retrying\n");
+      (void)pthread_mutex_lock(&i2cguard_stop);
+      isStop = isStopI2cThread;
+      (void)pthread_mutex_unlock(&i2cguard_stop);
+
+      if (isStop) {
+        STLOG_HAL_W("Stop command awaits, exit\n");
+        return -1;
+      }
       usleep(4000);
       retries++;
     }
@@ -597,9 +666,21 @@ redo:
 static int i2cRead(int fid, uint8_t* pvBuffer, int length) {
   int retries = 0;
   int result = -1;
+  bool isStop = false;
 
   while ((retries < 3) && (result < 0)) {
     result = read(fid, pvBuffer, length);
+
+    if (result <= 0) {
+      (void)pthread_mutex_lock(&i2cguard_stop);
+      isStop = isStopI2cThread;
+      (void)pthread_mutex_unlock(&i2cguard_stop);
+
+      if (isStop) {
+        STLOG_HAL_W("Stop command awaits, exit\n");
+        return -1;
+      }
+    }
 
     if (result == -1) {
       int e = errno;

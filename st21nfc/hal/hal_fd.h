@@ -45,6 +45,9 @@ typedef struct FWInfo {
 typedef enum {
   HAL_FD_STATE_AUTHENTICATE,
   HAL_FD_STATE_ERASE_FLASH,
+  HAL_FD_STATE_ERASE_FLASH4,
+  HAL_LD_STATE_ERASE_FLASHNFC,
+  HAL_LD_STATE_ERASE_FLASH4,
   HAL_LD_STATE_ERASE_FLASH1,
   HAL_LD_STATE_ERASE_FLASH2,
   HAL_FD_STATE_SEND_RAW_APDU,
@@ -77,12 +80,11 @@ typedef enum {
 #define FU_ERROR 4
 #define FU_AUTH 5
 
-#define MAX_BUFFER_SIZE 300
-
 // HwVersion :
 #define HW_NFCD 0x04
 #define HW_ST54J 0x05
 #define HW_ST54L 0x06
+#define HW_NFCL 0x07
 
 extern const int nfc_patch_cmd_nb;
 extern const char ApduAuthentRecov[24];
@@ -92,12 +94,16 @@ extern const char nfc_patch_size_tab[];
 /* Function declarations */
 int hal_fd_init();
 void hal_fd_close();
-uint8_t ft_cmd_HwReset(uint8_t* pdata, uint8_t* clf_mode, bool force);
-void ExitHibernateHandler(HALHANDLE mHalHandle, uint16_t data_len,
-                          uint8_t* p_data);
+uint8_t ft_cmd_HwReset(uint8_t* pdata, uint8_t* clf_mode, bool force,
+                       bool* router_mode_on);
+void ExitHibernateEnterLoaderHandler(HALHANDLE mHalHandle, uint16_t data_len,
+                                     uint8_t* p_data);
+void ExitHibernateOnlyHandler(HALHANDLE mHalHandle, uint16_t data_len,
+                              uint8_t* p_data);
 void FwUpdateHandler(HALHANDLE mHalHandle, uint16_t data_len, uint8_t* p_data);
 void LdUpdateHandler(HALHANDLE mHalHandle, uint16_t data_len, uint8_t* p_data);
 void ApplyCustomParamHandler(HALHANDLE mHalHandle, uint16_t data_len,
                              uint8_t* p_data);
 void resetHandlerState();
+FWInfo* hal_fd_getFwInfo();
 #endif /* HAL_FD_H_ */

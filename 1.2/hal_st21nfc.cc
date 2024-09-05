@@ -32,7 +32,11 @@
 #include "halcore.h"
 #include "st21nfc_dev.h"
 
+#if defined(ST_LIB_32)
+#define VENDOR_LIB_PATH "/vendor/lib/"
+#else
 #define VENDOR_LIB_PATH "/vendor/lib64/"
+#endif
 #define VENDOR_LIB_EXT ".so"
 
 extern void HalCoreCallback(void* context, uint32_t event, const void* d,
@@ -42,7 +46,7 @@ extern void i2cSetTimeBetweenCmds(int ms);
 
 typedef int (*STEseReset)(void);
 
-const char* halVersion = "ST21NFC HAL1.3C Version 140-20231112-23W45p1";
+const char* halVersion = "ST21NFC HAL1.3C Version 150-20240824-24W34p0";
 
 uint8_t cmd_set_nfc_mode_enable[] = {0x2f, 0x02, 0x02, 0x02, 0x01};
 uint8_t hal_is_closed = 1;
@@ -544,10 +548,6 @@ void StNfc_hal_getConfig(android::hardware::nfc::V1_1::NfcConfig& config) {
     if (num == 0x1) {
       nfc_mode = 0x1;
     }
-  }
-
-  if (GetNumValue(NAME_POLL_BAIL_OUT_MODE, &num, sizeof(num))) {
-    config.nfaPollBailOutMode = num;
   }
 
   if (GetNumValue(NAME_ISO_DEP_MAX_TRANSCEIVE, &num, sizeof(num))) {

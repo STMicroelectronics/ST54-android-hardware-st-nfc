@@ -13,6 +13,7 @@ cc_binary {
     init_rc: ["nfc-service-st.rc"],
     vintf_fragments: ["nfc-service-st.xml"],
     vendor: true,
+    owner: "st",
     cflags: [
         "-Wall",
         "-Wextra",
@@ -30,4 +31,9 @@ cc_binary {
         "Nfc.cpp",
         "hal_st21nfc.cc",
     ],
+    arch: {
+        arm: {
+            cflags: ["-DST_LIB_32"],
+        },
+    },
 }

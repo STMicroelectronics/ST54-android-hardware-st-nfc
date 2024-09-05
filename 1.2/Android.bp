@@ -31,7 +31,7 @@ cc_binary {
     srcs: [
         "StNfcService.cpp",
         "Nfc.cpp",
-        "hal_st21nfc.cc"
+        "hal_st21nfc.cc",
     ],
 
     shared_libs: [
@@ -49,5 +49,11 @@ cc_binary {
 
     sanitize: {
         memtag_heap: true,
+    },
+
+    arch: {
+        arm: {
+            cflags: ["-DST_LIB_32"],
+        },
     },
 }

@@ -75,11 +75,6 @@ NCI_HAL_MODULE="nfc_nci.st21nfc"
 DEVICE_HOST_ALLOW_LIST={02:C0}
 
 ###############################################################################
-# BAIL OUT value for P2P
-# Implements algorithm for NFC-DEP protocol priority over ISO-DEP protocol.
-POLL_BAIL_OUT_MODE=0
-
-###############################################################################
 # Extended APDU length for ISO_DEP
 ISO_DEP_MAX_TRANSCEIVE=0xFEFF
 
@@ -164,4 +159,3 @@ CORE_CONF_PROP={ 20, 02, 13, 06,
 # Enable NDEF-NFCEE feature
 # 0: disable (default)    1: enable
 NDEF_NFCEE_ENABLE=0
-
