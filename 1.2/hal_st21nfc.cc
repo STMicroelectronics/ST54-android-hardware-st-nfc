@@ -46,7 +46,7 @@ extern void i2cSetTimeBetweenCmds(int ms);
 
 typedef int (*STEseReset)(void);
 
-const char* halVersion = "ST21NFC HAL1.3C Version 150-20240824-24W34p0";
+const char* halVersion = "ST21NFC HAL1.3C Version 150-20240927-24W39p0";
 
 uint8_t cmd_set_nfc_mode_enable[] = {0x2f, 0x02, 0x02, 0x02, 0x01};
 uint8_t hal_is_closed = 1;
@@ -296,9 +296,7 @@ int StNfc_hal_open(nfc_stack_callback_t* p_cback,
   (void)pthread_mutex_lock(&hal_mtx);
 
   if (!hal_is_closed) {
-    // hal_wrapper_close(0, nfc_mode);
-    (void)pthread_mutex_unlock(&hal_mtx);
-    return 0;
+    hal_wrapper_close(0, nfc_mode);
   }
 
   dev.p_cback = p_cback;  // will be replaced by wrapper version

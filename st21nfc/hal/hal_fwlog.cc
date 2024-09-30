@@ -60,7 +60,7 @@ uint8_t handlePollingLoopData(uint8_t format, uint8_t* tlvBuffer,
     case T_fieldOn:
     case T_fieldOff:
       STLOG_HAL_D("%s - FieldOn/Off", __func__);
-      *NewTlv = (uint8_t*)malloc(8 * sizeof(uint8_t));
+      *NewTlv = (uint8_t*)malloc(9 * sizeof(uint8_t));
       value_len = 0x06;
       (*NewTlv)[0] = TYPE_REMOTE_FIELD;
       (*NewTlv)[1] = flag;

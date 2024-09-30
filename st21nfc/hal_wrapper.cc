@@ -356,6 +356,8 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
     return;
   }
 
+  HalSendDownstreamStopTimer(mHalHandle);
+
   switch (mHalWrapperState) {
     case HAL_WRAPPER_STATE_CLOSED:  // 0
       STLOG_HAL_V("%s - mHalWrapperState = HAL_WRAPPER_STATE_CLOSED", __func__);
