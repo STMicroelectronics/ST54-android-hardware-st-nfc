@@ -72,7 +72,7 @@ NCI_HAL_MODULE="nfc_nci.st21nfc"
 
 ###############################################################################
 # White list to be set at startup.
-DEVICE_HOST_ALLOW_LIST={02:C0}
+DEVICE_HOST_ALLOW_LIST={02:A1:A2:C0}
 
 ###############################################################################
 # Extended APDU length for ISO_DEP
@@ -91,27 +91,42 @@ OFF_HOST_SIM_PIPE_ID=0x3E
 #This settings will be used when application does not set this parameter
 # eSE   0x82 (eSE),    0x86 (eUICC/SPI-SE)
 # UICC  0x81 (UICC_1), 0x85 (UICC_2)
-DEFAULT_SYS_CODE_ROUTE=0x81
+#
+#We deliver with FF by default which is an invalid EE ID so there is no route.
+#It is up to the wallet to override this route with overwriteRoutingTable
+# (via setUserDefaultRoute) once the Felica applet instance has been created.
+DEFAULT_SYS_CODE_ROUTE=0xFF
 
 ###############################################################################
 #Set the Felica T3T System Code supported power state:
 DEFAULT_SYS_CODE_PWR_STATE=0x3B
 
 ###############################################################################
-# Path and Files used for FW update binaries storage
+# FW and CONF upgrade control.
+
+# Folder of the firmware binary (will try to append nfc.fw.dfl also)
 STNFC_FW_PATH_STORAGE="/vendor/firmware/"
+
+# Filename of the firmware binary. Default: automatic depending on chip hardware.
+#STNFC_FW_BIN_NAME="st54l_fw.bin"
+
 # Folder of the firmware configuration
 STNFC_FW_CONF_STORAGE="/vendor/etc/"
 
-STNFC_FW_BIN_NAME="st54l_fw.bin"
-STNFC_FW_CONF_NAME="st54l_conf.txt"
+# Filename of the firmware config. Default: automatic depending on chip hardware.
+#STNFC_FW_CONF_NAME="st54l_conf.txt"
 
 ###############################################################################
 # Default off-host route for Felica.
 #This settings will be used when application does not set this parameter
 # eSE   0x82 (eSE),    0x86 (eUICC/SPI-SE)
 # UICC  0x81 (UICC_1), 0x85 (UICC_2)
-DEFAULT_NFCF_ROUTE=0x81
+#
+#This route is not really important, the SC route prevails.
+#We deliver with FF by default which is an invalid EE ID so there is no route.
+#It is up to the wallet to override this route with overwriteRoutingTable
+# (via setUserDefaultRoute) once the Felica applet instance has been created.
+DEFAULT_NFCF_ROUTE=0xFF
 
 ###############################################################################
 # Configure the default off-host route.
@@ -129,8 +144,9 @@ DEFAULT_ROUTE=0x81
 
 ###############################################################################
 # Configure the NFCEEIDs of offhost UICC.
-# UICC  0x81 (UICC_1), 0x85 (UICC_2)
-OFFHOST_ROUTE_UICC={81,85}
+# UICC  0x81 (UICC_1), 0x83/5 (UICC_2)
+# eUICC Cat3  0x87 (profile 1), 0x89 (profile 2)
+OFFHOST_ROUTE_UICC={81,87,89}
 
 ###############################################################################
 # Configure the NFCEEIDs of offhost eSEs.
@@ -159,3 +175,11 @@ CORE_CONF_PROP={ 20, 02, 13, 06,
 # Enable NDEF-NFCEE feature
 # 0: disable (default)    1: enable
 NDEF_NFCEE_ENABLE=0
+
+###############################################################################
+# Vendor specific mode to enable HAL event log.
+HAL_EVENT_LOG_DEBUG_ENABLED=0
+
+###############################################################################
+# File used for NFC HAL event log storage
+HAL_EVENT_LOG_STORAGE="/data/vendor/nfc"

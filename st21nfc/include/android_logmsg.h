@@ -27,6 +27,7 @@ extern "C" {
 
 #include <cutils/properties.h>
 #include <log/log.h>
+
 #include "data_types.h"
 
 #define DISP_NCI ProtoDispAdapterDisplayNciPacket

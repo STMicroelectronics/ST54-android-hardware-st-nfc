@@ -36,6 +36,7 @@
 #include "android_logmsg.h"
 #include "halcore.h"
 #include "halcore_private.h"
+#include "hal_config.h"
 
 //------- from st21nfc.h in kernel driver
 #define ST21NFC_MAGIC 0xEA
@@ -65,6 +66,7 @@
 
 static int fidI2c = 0;
 static int cmdPipe[2] = {0, 0};
+static int notifyResetRequest = 0;
 static int is4bytesheader = 0;
 static bool recovery_mode = false;
 static bool resetPulseDone = false;
@@ -74,7 +76,7 @@ static int readErrorCnt = 0;
 const uint8_t dummy_reset_ntf[] = {0x60, 0x00, 0x05, 0x00,
                                    0x00, 0x20, 0x00, 0x00};
 
-static struct pollfd event_table[2];
+static struct pollfd event_table[3];
 static pthread_t threadHandle = (pthread_t)NULL;
 pthread_mutex_t i2ctransport_mtx = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t i2cguard_mtx = PTHREAD_MUTEX_INITIALIZER;
@@ -113,6 +115,8 @@ static void* I2cWorkerThread(void* arg) {
   HALHANDLE hHAL = (HALHANDLE)arg;
   STLOG_HAL_D("echo thread started...\n");
   bool readOk = false;
+  int eventNum = (notifyResetRequest <= 0) ? 2 : 3;
+  bool resetting = false;
 
   readErrorCnt = 0;
 
@@ -125,9 +129,13 @@ static void* I2cWorkerThread(void* arg) {
     event_table[1].events = POLLIN;
     event_table[1].revents = 0;
 
+    event_table[2].fd = notifyResetRequest;
+    event_table[2].events = POLLPRI;
+    event_table[2].revents = 0;
+
     STLOG_HAL_V("echo thread go to sleep...\n");
 
-    int poll_status = poll(event_table, 2, -1);
+    int poll_status = poll(event_table, eventNum, -1);
 
     if (-1 == poll_status) {
       poll_status = errno;
@@ -232,7 +240,8 @@ static void* I2cWorkerThread(void* arg) {
                     i2cRead(fidI2c, buffer + 3 + extra, remaining - extra);
               }
               if (bytesRead == remaining - extra) {
-                DispHal("RX DATA", buffer, 3 + extra + bytesRead);
+                // Log message NFCC to Hal
+                DispHal("RX DATA K2H", buffer, 3 + extra + bytesRead);
                 HalSendUpstream(hHAL, buffer, 3 + extra + bytesRead);
                 // We managed to read data, clear error count
                 readErrorCnt = 0;
@@ -320,11 +329,30 @@ static void* I2cWorkerThread(void* arg) {
       }
     }
 
+    if (event_table[2].revents & POLLPRI && eventNum > 2) {
+      STLOG_HAL_W("thread received reset request command.. \n");
+      char reset[10];
+      int byte;
+      reset[9] = '\0';
+      lseek(notifyResetRequest, 0, SEEK_SET);
+      byte = read(notifyResetRequest, &reset, sizeof(reset));
+      if (byte < 10) {
+        reset[byte] = '\0';
+      }
+      if (byte > 0 && reset[0] == '1' && resetting == false) {
+        STLOG_HAL_E("trigger NFCC reset.. \n");
+        resetting = true;
+        i2cResetPulse(fidI2c);
+      }
+    }
   } while (!closeThread);
 
   close(fidI2c);
   close(cmdPipe[0]);
   close(cmdPipe[1]);
+  if (notifyResetRequest > 0) {
+    close(notifyResetRequest);
+  }
 
   // Stop here if we got a serious error above.
   assert(closeThread);
@@ -354,6 +382,26 @@ int I2cWriteCmd(const uint8_t* x, size_t len) {
 bool I2cOpenLayer(void* dev, HAL_CALLBACK callb, HALHANDLE* pHandle) {
   uint32_t NoDbgFlag = HAL_FLAG_DEBUG;
   uint8_t DummyByte;
+  char nfc_dev_node[64];
+  char nfc_reset_req_node[128];
+
+  /*Read device node path*/
+  if (!GetStrValue(NAME_ST_NFC_DEV_NODE, (char*)nfc_dev_node,
+                   sizeof(nfc_dev_node))) {
+    STLOG_HAL_D("Open /dev/st21nfc\n");
+    strcpy(nfc_dev_node, "/dev/st21nfc");
+  }
+  /*Read nfcc reset request sysfs*/
+  if (GetStrValue(NAME_ST_NFC_RESET_REQ_SYSFS, (char*)nfc_reset_req_node,
+                  sizeof(nfc_reset_req_node))) {
+    STLOG_HAL_D("Open %s\n", nfc_reset_req_node);
+    notifyResetRequest = open(nfc_reset_req_node, O_RDONLY);
+    if (notifyResetRequest < 0) {
+      STLOG_HAL_E("unable to open %s (%s) \n", nfc_reset_req_node,
+                  strerror(errno));
+    }
+  }
+
   mHalReplay =
       android::base::GetProperty("persist.vendor.nfc.st_hal_replay", "")
               .compare("true")
@@ -372,9 +420,10 @@ bool I2cOpenLayer(void* dev, HAL_CALLBACK callb, HALHANDLE* pHandle) {
     return true;
   }
   (void)pthread_mutex_lock(&i2ctransport_mtx);
-  fidI2c = open("/dev/st21nfc", O_RDWR);
+
+  fidI2c = open(nfc_dev_node, O_RDWR);
   if (fidI2c < 0) {
-    STLOG_HAL_W("unable to open /dev/st21nfc  (%s) \n", strerror(errno));
+    STLOG_HAL_W("unable to open %s (%s) \n", nfc_dev_node, strerror(errno));
     (void)pthread_mutex_unlock(&i2ctransport_mtx);
     return false;
   }
@@ -544,62 +593,17 @@ static int i2cRecovery(int fid) {
 } /* i2cRecovery*/
 
 /**
- * Signal kernel driver that the NFCC may or may not use the eSE
- * This is required to manage SE power finely when SPI is connected.
- * In other cases, this information is not used.
- */
-int i2cNfccMayUseEse(int use) {
-  int result;
-  int se_needed = (use ? 1 : 0);
-
-  if (-1 == (result = ioctl(fidI2c, ST21NFC_USE_ESE, &se_needed))) {
-    result = -1;
-  }
-  STLOG_HAL_D("i2cNfccMayUseEse(%d), result = %d", use, result);
-  return result;
-} /* i2cNfccMayUseEse */
-
-/**
  * Write data to st21nfc, on failure do max 3 retries.
  * @param fid File descriptor for NFC device
  * @param pvBuffer Data to write
  * @param length Data size
  * @return 0 if bytes written, -1 if error
  */
-struct timespec sTsPrev = {.tv_sec = 0, .tv_nsec = 0};
-static int sMs = 0;
-static pthread_mutex_t sTsLock = PTHREAD_MUTEX_INITIALIZER;
-
-void i2cSetTimeBetweenCmds(int ms) {
-  STLOG_HAL_D("i2cSetTimeBetweenCmds(%d)", ms);
-  (void)pthread_mutex_lock(&sTsLock);
-  sMs = ms;
-  (void)pthread_mutex_unlock(&sTsLock);
-}
-
 static int i2cWrite(int fid, const uint8_t* pvBuffer, int length) {
   int retries = 0;
   int result = 0;
   int halfsecs = 0;
   bool isStop = false;
-
-  (void)pthread_mutex_lock(&sTsLock);
-  if (sMs != 0) {
-    if (sTsPrev.tv_sec != 0) {
-      // enforce a delay of sMs between sending two commands,
-      // we update sTsPrev to next slot to send
-      if (sTsPrev.tv_nsec >= (1000000000L - (sMs * 1000000L))) {
-        sTsPrev.tv_nsec = sTsPrev.tv_nsec + (sMs * 1000000L) - 1000000000L;
-        sTsPrev.tv_sec += 1;
-      } else {
-        sTsPrev.tv_nsec += (sMs * 1000000L);
-      }
-      // we need to send command at new sTsPrev.
-      clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &sTsPrev, NULL);
-    }
-    clock_gettime(CLOCK_MONOTONIC, &sTsPrev);
-  }
-  (void)pthread_mutex_unlock(&sTsLock);
 
 redo:
   while (retries < 3) {

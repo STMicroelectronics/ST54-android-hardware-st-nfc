@@ -23,11 +23,11 @@
 #include <hardware/nfc.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <stdint.h>
 
 #include "android_logmsg.h"
 #include "halcore_private.h"
@@ -37,6 +37,7 @@ extern void DispHal(const char* title, const void* data, size_t length);
 
 // File containing the log to replay
 #define FILE_TO_REPLAY "/vendor/etc/hal_replay.txt"
+#define FILE_TO_REPLAY_STARTUP "/vendor/etc/hal_replay_startup.txt"
 
 /**************************************************************************************************
  *
@@ -60,11 +61,8 @@ uint8_t mRxData[MAX_LINE_LENGTH];
 int mRxDataSize = 0;
 unsigned long long mRxTimeMs = 0, mTxTimeMs = 0;
 bool mHalReplay = false;
+HalInstance* mHalReplayInst = NULL;
 
-#define REPLAY_INIT_OFF 0
-#define REPLAY_INIT_FILE 1
-#define REPLAY_INIT_AUTO 2
-#define REPLAY_INIT_DONE 3
 int mReplayInitStatus = REPLAY_INIT_OFF;
 uint8_t mTxData[MAX_LINE_LENGTH];
 int mTxDataSize = 0;
@@ -86,32 +84,36 @@ fpos_t mFilePos;
 
 /*** Auto replay data ***/
 uint8_t mCoreResetNtfInit[] = {
-    0x60, 0x00, 0x1f, 0x01, 0x01, 0x20, 0x02, 0x1a, 0x05, 0x02, 0x03, 0x13,
-    0x94, 0x35, 0x01, 0x05, 0x00, 0x00, 0x44, 0x64, 0xd6, 0x00, 0x00, 0x79,
-    0x30, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0xb2, 0x52, 0x01};
+    0x60, 0x00, 0x1f, 0x01, 0x01, 0x20, 0x02, 0x1a, 0x06, 0x03, 0x02, 0x01,
+    0x07, 0x63, 0x03, 0x02, 0x01, 0x00, 0x44, 0x38, 0x88, 0x00, 0x00, 0xce,
+    0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfb, 0x8c, 0x01};
 uint8_t mCoreResetRsp[] = {0x40, 0x00, 0x01, 0x00};
 uint8_t mCoreResetNtfReset[] = {
-    0x60, 0x00, 0x1f, 0x02, 0x01, 0x20, 0x02, 0x1a, 0x05, 0x02, 0x03, 0x13,
-    0x94, 0x35, 0x01, 0x05, 0x00, 0x00, 0x44, 0x64, 0xd6, 0x00, 0x00, 0x79,
-    0x30, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0xb2, 0x52, 0x01};
-uint8_t mCoreInitRsp[] = {0x40, 0x01, 0x18, 0x00, 0x1a, 0x7e, 0x06, 0x00, 0x01,
-                          0x00, 0x04, 0xff, 0xff, 0x00, 0x0c, 0x01, 0x05, 0x01,
-                          0x00, 0x02, 0x00, 0x03, 0x00, 0x00, 0x00, 0x90, 0x00};
+    0x60, 0x00, 0x1f, 0x02, 0x01, 0x20, 0x02, 0x1a, 0x06, 0x03, 0x02, 0x01,
+    0x07, 0x63, 0x03, 0x02, 0x01, 0x00, 0x44, 0x38, 0x88, 0x00, 0x00, 0xce,
+    0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfb, 0x8c, 0x01};
+uint8_t mCoreInitRsp[] = {0x40, 0x01, 0x1a, 0x00, 0x2a, 0x7e, 0x06, 0x00,
+                          0x01, 0x00, 0x04, 0xff, 0xff, 0x00, 0x0c, 0x01,
+                          0x05, 0x01, 0x01, 0x02, 0x02, 0x01, 0x02, 0x03,
+                          0x00, 0x00, 0x00, 0x90, 0x00};
 uint8_t mCoreCreditsNtfHci[] = {0x60, 0x06, 0x03, 0x01, 0x01, 0x01};
 uint8_t mPropRsp11[] = {
-    0x4f, 0x02, 0x44, 0x00, 0x01, 0x00, 0x40, 0x00, 0x00, 0x00, 0x08, 0x0d,
-    0x08, 0x05, 0x03, 0xe8, 0x06, 0x40, 0x10, 0x00, 0x04, 0x04, 0x04, 0x04,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x02, 0x02, 0x02, 0x01, 0x01,
-    0x01, 0x02, 0x00, 0x00, 0x00, 0x00, 0x02, 0x80, 0xb0, 0x71, 0x10, 0x34,
-    0x00, 0x32, 0x00, 0x00, 0x00, 0x00, 0x40, 0x40, 0x10, 0x00, 0x40, 0x00,
-    0x6d, 0x1c, 0x75, 0x5f, 0x06, 0x78, 0x05, 0x00, 0x00, 0x00, 0x00};
-uint8_t mPropRsp02[] = {0x4f, 0x02, 0x28, 0x00, 0x01, 0x00, 0x24, 0xa0, 0xd2,
-                        0x0d, 0x13, 0x88, 0x01, 0xf4, 0x04, 0x02, 0x1e, 0x1e,
-                        0xff, 0x08, 0x02, 0x03, 0x02, 0x00, 0x07, 0x00, 0x05,
-                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                        0x00, 0x00, 0x04, 0x00, 0x08, 0x04, 0x09};
-uint8_t mPropRsp01[] = {0x4f, 0x02, 0x0c, 0x00, 0x01, 0x00, 0x08, 0x22,
-                        0x17, 0x06, 0x06, 0x36, 0x0c, 0x88, 0x88};
+    0x4f, 0x02, 0x4c, 0x00, 0x01, 0x00, 0x48, 0x00, 0x04, 0x00, 0x00, 0x00,
+    0x00, 0x05, 0x03, 0xe8, 0x06, 0x40, 0x11, 0x00, 0x04, 0x04, 0x04, 0x04,
+    0x04, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x02, 0x02, 0x02, 0x01, 0x01,
+    0x01, 0x02, 0x00, 0x20, 0x00, 0x00, 0x00, 0x01, 0xb0, 0x71, 0x10, 0x34,
+    0x00, 0x32, 0x00, 0x00, 0x00, 0x54, 0x40, 0x40, 0x10, 0x00, 0x40, 0x00,
+    0x6d, 0x1c, 0x75, 0x5f, 0x06, 0x00, 0x00, 0x00, 0x78, 0x00, 0x05, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+uint8_t mPropRsp02[] = {
+    0x4f, 0x02, 0x34, 0x00, 0x01, 0x00, 0x30, 0xa0, 0x82, 0x0d, 0x13,
+    0x88, 0x01, 0xf4, 0x04, 0x00, 0x00, 0x00, 0xff, 0x08, 0x02, 0x03,
+    0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x02, 0x00, 0x00, 0x04, 0x00, 0xc9, 0x07, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+uint8_t mPropRsp01[] = {0x4f, 0x02, 0x18, 0x00, 0x01, 0x00, 0x14, 0x20, 0x15,
+                        0x06, 0x06, 0x06, 0x0c, 0x88, 0x88, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 uint8_t mPropRsp14[] = {
     0x4f, 0x02, 0x96, 0x00, 0x01, 0x00, 0x92, 0x01, 0x02, 0x00, 0x0a, 0x01,
     0x00, 0x00, 0x00, 0x0f, 0x00, 0x1e, 0x0f, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -126,20 +128,21 @@ uint8_t mPropRsp14[] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-uint8_t mPropRsp08[] = {0x4f, 0x02, 0x10, 0x00, 0x01, 0x00, 0x0c,
-                        0xbf, 0x01, 0xef, 0x00, 0x00, 0x00, 0xc1,
-                        0xc2, 0xc3, 0x00, 0x3d, 0x00};
+uint8_t mPropRsp08[] = {0x4f, 0x02, 0x1c, 0x00, 0x01, 0x00, 0x18, 0x3f,
+                        0x00, 0x2d, 0x03, 0x00, 0x00, 0xc1, 0xc2, 0xe2,
+                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
 uint8_t mPropRsp09[] = {0x4f, 0x02, 0x03, 0x00, 0x00};
 
 uint8_t mPropSetNfcModeRsp[] = {0x4f, 0x02, 0x01, 0x00};
 uint8_t mCoreResetNtfModeSet[] = {
-    0x60, 0x00, 0x1f, 0xa0, 0x01, 0x20, 0x02, 0x1a, 0x05, 0x02, 0x03, 0x13,
-    0x94, 0x35, 0x01, 0x05, 0x00, 0x00, 0x44, 0x64, 0xd6, 0x00, 0x00, 0x79,
-    0x30, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0xb2, 0x52, 0x01};
+    0x60, 0x00, 0x1f, 0xa0, 0x01, 0x20, 0x02, 0x1a, 0x06, 0x03, 0x02, 0x01,
+    0x07, 0x63, 0x03, 0x02, 0x01, 0x00, 0x44, 0x38, 0x88, 0x00, 0x00, 0xce,
+    0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfb, 0x8c, 0x01};
 uint8_t mCoreSetConfigRsp[] = {0x40, 0x02, 0x02, 0x00, 0x00};
 uint8_t mRfDiscoverMapRsp[] = {0x41, 0x00, 0x01, 0x00};
-uint8_t mNfceeDiscoverRsp[] = {0x42, 0x00, 0x02, 0x00, 0x03};
+uint8_t mNfceeDiscoverRsp[] = {0x42, 0x00, 0x02, 0x00, 0x02};
 uint8_t mNfceeDiscoverNtf81[] = {0x62, 0x00, 0x08, 0x81, 0x01, 0x00,
                                  0x01, 0x03, 0x01, 0x02, 0x00};
 uint8_t mNfceeDiscoverNtf86[] = {0x62, 0x00, 0x08, 0x86, 0x01, 0x00,
@@ -192,6 +195,9 @@ uint8_t mRfSetRoutingTableRsp[] = {0x41, 0x01, 0x01, 0x00};
 uint8_t mRfDiscoverRsp[] = {0x41, 0x03, 0x01, 0x00};
 uint8_t mRfDeactivateIdleRsp[] = {0x41, 0x06, 0x01, 0x00};
 uint8_t mRfFieldInfoNtfOff[] = {0x61, 0x07, 0x01, 0x00};
+uint8_t mPropAndroidCapsRsp[] = {0x4f, 0x0c, 0x0e, 0x00, 0x00, 0x00,
+                                 0x00, 0x03, 0x00, 0x01, 0x01, 0x01,
+                                 0x01, 0x01, 0x03, 0x01, 0x00};
 
 /**************************************************************************************************
  *
@@ -209,6 +215,21 @@ bool HalOpenReplayFile() {
     return false;
   }
   STLOG_HAL_V("HalOpenReplayFile() - done");
+  return true;
+}
+
+/*****************************************************************************/
+/***** HalOpenReplayFileStartup *****/
+/*****************************************************************************/
+bool HalOpenReplayFileStartup() {
+  FILE* startupFile = fopen(FILE_TO_REPLAY_STARTUP, "rb");
+  if (startupFile == NULL) {
+    STLOG_HAL_E("HalOpenReplayFileStartup() - no startup file available.");
+    return false;
+  }
+  STLOG_HAL_V("HalOpenReplayFileStartup() - success");
+  fclose(mReplayFile);
+  mReplayFile = startupFile;
   return true;
 }
 
@@ -418,6 +439,11 @@ int HalReplayAuto() {
                 break;
             }
             break;
+          case 0x0c:
+            dataPtr = mPropAndroidCapsRsp;
+            mRxDataSize = sizeof(mPropAndroidCapsRsp);
+            mIsNextRx = false;
+            break;
         }
         break;
       case 0x21:
@@ -461,6 +487,7 @@ int HalReplayAuto() {
             if (mRxCnt == 0) {
               dataPtr = mNfceeDiscoverRsp;
               mRxDataSize = sizeof(mNfceeDiscoverRsp);
+              mRxCnt++;
             } else if (mRxCnt == 1) {
               // Send NFCEE_DISCOVER_NTF
               dataPtr = mNfceeDiscoverNtf81;
@@ -487,7 +514,7 @@ int HalReplayAuto() {
               dataPtr = mNfceeModeSetNtf;
               mRxDataSize = sizeof(mNfceeModeSetNtf);
             } else if (mRxCnt == 2) {
-              usleep(100);
+              usleep(40);
               // Send HCI HOT_PLUG
               if (mTxData[3] == 0x81) {
                 mActiveHciNfceeBitmap |= 0x01;
@@ -550,41 +577,44 @@ int HalReplayAuto() {
 /*****************************************************************************/
 void HalGetNextTxData(char* line) {
   int i, byte_count = 0;
-
+  char* save_ptr = line;
   fgetpos(mReplayFile, &mFilePos);
   do {
     if (strstr(line, " Tx ") != NULL) {
-      char* token = strtok(line, " ");
+      char* token = strtok_r(line, " ", &save_ptr);
       while (token != NULL) {
         if (strcmp(token, "Tx") == 0) {
           for (i = 0; i < 3; i++) {
-            token = strtok(NULL, " ");
-            sscanf(token, "%02X", (int*)&mExpTxData[byte_count++]);
+            token = strtok_r(NULL, " ", &save_ptr);
+            if (token != NULL)
+              sscanf(token, "%02X", (int*)&mExpTxData[byte_count++]);
+            else
+              break;
           }
           mExpTxDataSize = mExpTxData[2] + 3;
-          token = strtok(NULL, " ");
+          token = strtok_r(NULL, " ", &save_ptr);
           while (byte_count < mExpTxDataSize) {
             if ((token != NULL) && (!isspace(*token))) {
               sscanf(token, "%02X", (int*)&mExpTxData[byte_count++]);
             }
-            token = strtok(NULL, " ");
+            token = strtok_r(NULL, " ", &save_ptr);
             if ((token == NULL) && (byte_count < mExpTxDataSize)) {
               fgets(line, MAX_LINE_LENGTH, mReplayFile);
               if (strstr(line, " tx ") != NULL) {
-                token = strtok(line, " ");
+                token = strtok_r(line, " ", &save_ptr);
                 while (token != NULL) {
                   if (strcmp(token, "tx") == 0) {
-                    token = strtok(NULL, " ");
+                    token = strtok_r(NULL, " ", &save_ptr);
                     break;
                   }
-                  token = strtok(NULL, " ");
+                  token = strtok_r(NULL, " ", &save_ptr);
                 }
               }
             }
           }
           break;
         }
-        token = strtok(NULL, " ");
+        token = strtok_r(NULL, " ", &save_ptr);
       }
       // We had found a Tx line, we can stop going through the lines
       break;
@@ -603,9 +633,11 @@ void HalGetNextTxData(char* line) {
 void extract_frame(char* line, bool isTx) {
   int hour = 0, minute = 0, second = 0, millisecond = 0, i;
   int byte_count = 0;
-  char* token = strtok(line, " ");
-  char* time_str = strtok(NULL, " ");
-  sscanf(time_str, "%d:%d:%d.%3d", &hour, &minute, &second, &millisecond);
+  char* save_ptr = line;
+  char* token = strtok_r(line, " ", &save_ptr);
+  char* time_str = strtok_r(NULL, " ", &save_ptr);
+  if (time_str != NULL)
+    sscanf(time_str, "%d:%d:%d.%3d", &hour, &minute, &second, &millisecond);
 
   if (isTx) {
     mTxTimeMs = (hour * 3600 + minute * 60 + second) * 1000 + millisecond;
@@ -617,26 +649,29 @@ void extract_frame(char* line, bool isTx) {
     while (token != NULL) {
       if (strcmp(token, "Rx") == 0) {
         for (i = 0; i < 3; i++) {
-          token = strtok(NULL, " ");
-          sscanf(token, "%02X", (int*)&mRxData[byte_count++]);
+          token = strtok_r(NULL, " ", &save_ptr);
+          if (token != NULL)
+            sscanf(token, "%02X", (int*)&mRxData[byte_count++]);
+          else
+            break;
         }
         mRxDataSize = mRxData[2] + 3;
-        token = strtok(NULL, " ");
+        token = strtok_r(NULL, " ", &save_ptr);
         while (byte_count < mRxDataSize) {
           if ((token != NULL) && (!isspace(*token))) {
             sscanf(token, "%02X", (int*)&mRxData[byte_count++]);
           }
-          token = strtok(NULL, " ");
+          token = strtok_r(NULL, " ", &save_ptr);
           if ((token == NULL) && (byte_count < mRxDataSize)) {
             fgets(line, MAX_LINE_LENGTH, mReplayFile);
             if (strstr(line, " rx ") != NULL) {
-              token = strtok(line, " ");
+              token = strtok_r(line, " ", &save_ptr);
               while (token != NULL) {
                 if (strcmp(token, "rx") == 0) {
-                  token = strtok(NULL, " ");
+                  token = strtok_r(NULL, " ", &save_ptr);
                   break;
                 }
-                token = strtok(NULL, " ");
+                token = strtok_r(NULL, " ", &save_ptr);
               }
             } else if (strstr(line, " Tx ") != NULL) {
               mIsEmbeddedTx = true;
@@ -645,7 +680,7 @@ void extract_frame(char* line, bool isTx) {
         }
         break;
       }
-      token = strtok(NULL, " ");
+      token = strtok_r(NULL, " ", &save_ptr);
     }
     // Restore the position at just after initial line read
     fsetpos(mReplayFile, &mFilePos);
@@ -676,7 +711,23 @@ int HalGetNextFrameInfo() {
   while (fgets(line, MAX_LINE_LENGTH, mReplayFile) != NULL) {
     if (strstr(line, " Rx ") != NULL) {
       // Process Rx data
-      STLOG_HAL_V("%s; processing Rx: %s", __func__, line);
+      {
+        // replace the content in the logcat otherwise the parser is lost
+        char linefordump[MAX_LINE_LENGTH];
+        strncpy(linefordump, line, sizeof(linefordump));
+        for (int i = 0;
+             (i < (int)sizeof(linefordump) - 1) && (linefordump[i] != '\0');
+             i++) {
+          if (linefordump[i] == 'R' && linefordump[i + 1] == 'x') {
+            linefordump[i] = '<';
+            linefordump[i + 1] = '-';
+          }
+          if ((linefordump[i] == '\r') || (linefordump[i] == '\n')) {
+            linefordump[i] = ' ';
+          }
+        }
+        STLOG_HAL_V("%s; processing incoming frame: %s", __func__, linefordump);
+      }
 
       mIsEmbeddedTx = false;
 
@@ -684,14 +735,22 @@ int HalGetNextFrameInfo() {
 
       if (mReplayInitStatus == REPLAY_INIT_OFF) {
         if ((mRxData[0] != 0x60) && (mRxData[1] != 0x00)) {
-          STLOG_HAL_D("%s; !!!! Using auto init !!!!", __func__);
-          mReplayInitStatus = REPLAY_INIT_AUTO;
-          fclose(mReplayFile);
-          mRxDataSize = sizeof(mCoreResetNtfInit);
-          memcpy(mRxData, mCoreResetNtfInit, mRxDataSize);
-          mRxTimeMs = 0;
-          mIsNextRx = false;
+          // We need a boot sequence first. Do we have an init boot file ?
+          if (HalOpenReplayFileStartup()) {
+            STLOG_HAL_D("%s; !!!! Using init file !!!!", __func__);
+            mReplayInitStatus = REPLAY_INIT_FILE_STARTUP;
+            continue;
+          } else {
+            STLOG_HAL_D("%s; !!!! Using auto init !!!!", __func__);
+            mReplayInitStatus = REPLAY_INIT_AUTO;
+            fclose(mReplayFile);
+            mRxDataSize = sizeof(mCoreResetNtfInit);
+            memcpy(mRxData, mCoreResetNtfInit, mRxDataSize);
+            mRxTimeMs = 0;
+            mIsNextRx = false;
+          }
         } else {
+          STLOG_HAL_D("%s; !!!! Using init from scenario !!!!", __func__);
           mReplayInitStatus = REPLAY_INIT_FILE;
         }
       }
@@ -705,13 +764,43 @@ int HalGetNextFrameInfo() {
 
     // Process tx data
     if (strstr(line, " Tx ") != NULL) {
-      STLOG_HAL_V("%s; expecting Tx: %s", __func__, line);
+      {
+        // replace the content in the logcat otherwise the parser is lost
+        char linefordump[MAX_LINE_LENGTH];
+        strncpy(linefordump, line, sizeof(linefordump));
+        for (int i = 0;
+             (i < (int)sizeof(linefordump) - 1) && (linefordump[i] != '\0');
+             i++) {
+          if (linefordump[i] == 'T' && linefordump[i + 1] == 'x') {
+            linefordump[i] = '-';
+            linefordump[i + 1] = '>';
+          }
+          if ((linefordump[i] == '\r') || (linefordump[i] == '\n')) {
+            linefordump[i] = ' ';
+          }
+        }
+        STLOG_HAL_V("%s; expecting Tx: %s", __func__, linefordump);
+      }
       extract_frame(line, true);
       STLOG_HAL_V("%s; mTxTimeMs: %llu", __func__, mTxTimeMs);
       rslt = FOUND_TX;
       break;
     }
   }
+
+  if (rslt == END_OF_FILE && mReplayInitStatus == REPLAY_INIT_FILE_STARTUP) {
+    /* Ok, now we will move to regular sequence */
+    fclose(mReplayFile);
+    mReplayInitStatus = REPLAY_INIT_DONE;
+    STLOG_HAL_V("%s; End of %s, now go to %s", __func__, FILE_TO_REPLAY_STARTUP,
+                FILE_TO_REPLAY);
+    HalOpenReplayFile();
+    rslt = FOUND_RX;
+    if (mUnexpectedTxData) {
+      mUnexpectedTxData = false;
+    }
+  }
+
   // Check next Tx data
   if (mExpTxDataSize == 0) {
     HalGetNextTxData(line);
@@ -727,8 +816,20 @@ void HalCheckTxData() {
   mUnexpectedTxData = false;
   STLOG_HAL_V("%s; mExpTxData[] = 0x%x 0x%x, mTxData[] = 0x%x 0x%x", __func__,
               mExpTxData[0], mExpTxData[1], mTxData[0], mTxData[1]);
+
+  if (mExpTxDataSize != mTxDataSize) {
+    mUnexpectedTxData = true;
+  } else {
+    for (int i = 0; i < mExpTxDataSize; i++) {
+      if (mExpTxData[i] != mTxData[i]) {
+        mUnexpectedTxData = true;
+        break;
+      }
+    }
+  }
+
   // Check this data is the one we are expecting
-  if (memcmp(mExpTxData, mTxData, mExpTxDataSize) != 0) {
+  if (mUnexpectedTxData) {
     mTxTimeMs = 0;
     // Checking specific cases
     if ((mTxData[0] == 0x21) && (mTxData[1] == 0x01)) {
@@ -736,18 +837,17 @@ void HalCheckTxData() {
           "%s; Tx data: RF_SET_LISTEN_MODE_ROUTING_CMD command but different "
           "content",
           __func__);
-      return;
+      // return;
     } else if ((mTxData[0] == mExpTxData[0]) && (mTxData[1] == mExpTxData[1]) &&
                (mTxData[2] == mExpTxData[2])) {
       STLOG_HAL_V("%s; Tx data: Same NCI command but different payload",
                   __func__);
-      return;
+      // return;
     } else if ((mTxData[0] == 0x21) && (mTxData[1] == 0x03)) {
       STLOG_HAL_V(
           "%s; Tx data: RF_DISCOVER_CMD command but different "
           "content",
           __func__);
-      return;
     } else if ((mTxData[0] == 0x21) && (mTxData[1] == 0x04) &&
                (mExpTxData[0] == 0x21) && (mExpTxData[1] == 0x06)) {
       STLOG_HAL_E(
@@ -766,14 +866,9 @@ void HalCheckTxData() {
       mIsError = true;
     }
     STLOG_HAL_V("%s; Received unexpected Tx data", __func__);
-    mUnexpectedTxData = true;
     mIsNextRx = true;
     mRxCnt = 0;
   }
-  // else {
-  //   mExpTxDataSize = 0;
-  // }
-  // }
 }
 
 /**************************************************************************************************
@@ -868,6 +963,8 @@ void HalReplayInit(HalInstance* inst) {
 
   pthread_create(&replayThreadHandle, NULL, HalReplayThread, inst);
 
+  mHalReplayInst = inst;
+
   STLOG_HAL_V("%s; exit", __func__);
 }
 
@@ -892,7 +989,8 @@ void HalReplayClose() {
  * @param e HAL event
  */
 void HalReplayTxData(uint8_t* data, int length) {
-  DispHal("TX DATA HAL", data, length);
+  // Log message Hal to Replay
+  DispHal("TX DATA H2R", data, length);
 
   memcpy(mTxData, data, length);
   mTxDataSize = length;
@@ -906,4 +1004,23 @@ void HalReplayTxData(uint8_t* data, int length) {
 
   STLOG_HAL_V("%s; unblocking txSem", __func__);
   sem_post(&mTxSem);
+}
+
+/**
+ * If the NFC service died, we should reset HAL replay state
+ */
+void HalReplayOnDeath() {
+  STLOG_HAL_V("%s; enter", __func__);
+
+  if (replayThreadHandle != (pthread_t)NULL) {
+    void* ret;
+    mIsError = true;
+    STLOG_HAL_V("%s; waiting thread terminates", __func__);
+    pthread_join(replayThreadHandle, &ret);
+    STLOG_HAL_V("%s; done", __func__);
+    replayThreadHandle = (pthread_t)NULL;
+
+    HalReplayClose();
+    HalReplayInit(mHalReplayInst);
+  }
 }

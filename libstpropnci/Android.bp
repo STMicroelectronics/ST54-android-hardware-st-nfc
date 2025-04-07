@@ -1,0 +1,74 @@
+package {
+    default_team: "trendy_team_fwk_nfc",
+    // See: http://go/android-license-faq
+    // A large-scale-change added 'default_applicable_licenses' to import
+    // all of the 'license_kinds' from "Android-Apache-2.0"
+    // to get the below license kinds:
+    //   SPDX-license-identifier-Apache-2.0
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+cc_library_headers {
+    name: "libstnfc-nci-headers-vendor",
+    vendor_available: true,
+    export_include_dirs: [
+        "libstnfc-nci-headers/src/nfa/include",
+        "libstnfc-nci-headers/src/nfc/include",
+        "libstnfc-nci-headers/src/include",
+        "libstnfc-nci-headers/src/gki/ulinux",
+        "libstnfc-nci-headers/src/gki/common",
+        "libstnfc-nci-headers/src/nfc_vendor_extn/include",
+        "libstnfc-nci-headers/utils/include",
+    ],
+    visibility: [
+        "//vendor/st:__subpackages__",
+    ],
+}
+
+cc_library_static {
+    name: "libstpropnci-vendor",
+    vendor_available: true,
+    local_include_dirs: [
+        "include",
+        "src",
+    ],
+    header_libs: [
+        "libstnfc-nci-headers-vendor",
+    ],
+    export_header_lib_headers: [
+        "libstnfc-nci-headers-vendor",
+    ],
+
+    export_include_dirs: [
+        "include",
+    ],
+    srcs: [
+        "src/*.cc",
+    ],
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-Wimplicit-fallthrough",
+    ],
+    stl: "libc++_static",
+    visibility: [
+        "//vendor/st:__subpackages__",
+    ],
+    product_variables: {
+        debuggable: {
+            cflags: [
+                "-DDCHECK_ALWAYS_ON",
+            ],
+        },
+    },
+    shared_libs: [
+        "libcutils",
+        "liblog",
+        "libbase",
+    ],
+    target: {
+        vendor: {
+            cflags: ["-DSTPROPNCI_VENDOR"],
+        },
+    },
+}

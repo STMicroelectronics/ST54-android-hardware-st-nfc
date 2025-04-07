@@ -1,0 +1,235 @@
+/******************************************************************************
+ *
+ *  Copyright (C) 2025 STMicroelectronics
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at:
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ ******************************************************************************/
+#include <pthread.h>
+#include <string.h>
+#include <stpropnci-internal.h>
+
+int stpropnci_loglvl = 0;
+struct stpropnci_state stpropnci_state;
+
+static pthread_mutex_t reentry_lock = PTHREAD_MUTEX_INITIALIZER;
+static bool isInitialized = false;
+
+/*******************************************************************************
+**
+** Function         stpropnci_init
+**
+** Description      Initialize the library and registers the outgoing_cb of the
+**                  caller.
+**
+** Params:
+**   - loglvl :  0: nothing;  1: important data only; 2: everything
+**   - cb     : the callback that will be used for sending out messages from the
+**              lib
+**
+** Returns          true if the initialization is successful, false otherwise.
+**
+*******************************************************************************/
+bool stpropnci_init(int loglvl, outgoing_cb_t cb) {
+  (void)pthread_mutex_lock(&reentry_lock);
+  stpropnci_loglvl = loglvl;
+#ifndef STPROPNCI_VENDOR
+#define VARIANT "product"
+#else
+#define VARIANT "vendor"
+#endif
+  LOG_I(
+      "(re)Initializing (version:25Q2-BP2A-20250405-Gen-25W14p0, "
+      "variant:" VARIANT "), log:%d",
+      loglvl);
+
+  memset(&stpropnci_state, 0, sizeof(stpropnci_state));
+  // We use the msgPool sentinel as temp storage.
+  stpropnci_state.tmpbuff = stpropnci_state.pumpstate.msgPool.payload;
+  stpropnci_state.tmpbufflen = &stpropnci_state.pumpstate.msgPool.payloadlen;
+
+  isInitialized = true;
+  stpropnci_state.outCb = cb;
+
+  if (!stpropnci_pump_init()) {
+    LOG_E("Failed to initialize pump");
+    (void)pthread_mutex_unlock(&reentry_lock);
+    return false;
+  }
+
+  if (!stpropnci_modcb_init()) {
+    LOG_E("Failed to initialize modcb");
+    (void)pthread_mutex_unlock(&reentry_lock);
+    return false;
+  }
+
+  (void)pthread_mutex_unlock(&reentry_lock);
+  return true;
+}
+
+/*******************************************************************************
+**
+** Function         stpropnci_tmpbuff_reset
+**
+** Description      Simple helper function that clears the temporary storage of
+**                  messages.
+**
+** Returns          none
+**
+*******************************************************************************/
+void stpropnci_tmpbuff_reset() {
+  // We only reset the len value, no need to memset.
+  *stpropnci_state.tmpbufflen = 0;
+}
+
+/*******************************************************************************
+**
+** Function         stpropnci_deinit
+**
+** Description      Caller can call this when NFC is disabled, so resources may
+**                  be freed.
+**
+** Returns          none
+**
+*******************************************************************************/
+void stpropnci_deinit() {
+  (void)pthread_mutex_lock(&reentry_lock);
+  LOG_D("Deinitializing");
+  isInitialized = false;
+  stpropnci_modcb_fini();
+  stpropnci_pump_fini();
+  (void)pthread_mutex_unlock(&reentry_lock);
+}
+
+/*******************************************************************************
+**
+** Function         stpropnci_process
+**
+** Description      Process an NCI message.
+**                  This function is not reentrant; it will be blocking until a
+**                  previous call has
+**                  returned.
+**
+** Parameters
+**  - dir_from_upper: if true, the payload is a CMD or DATA and coming from the
+**                    stack.
+**                    if false, it is RSP, NTF, or DATA and coming from NFCC.
+**  - payload: a buffer in the caller memory space.
+**             The memory can be freed after this function returns.
+**  - payloadlen: the length of data inside payload buffer.
+**
+** Returns          true if the message has been processed and caller can
+**                  discard it,
+**                  false if caller should forward it directly.
+**
+*******************************************************************************/
+bool stpropnci_process(bool dir_from_upper, const uint8_t* payload,
+                       const uint16_t payloadlen) {
+  bool ret = false;
+  uint8_t mt, pbf, gid, oid;
+
+  (void)pthread_mutex_lock(&reentry_lock);
+  if (!isInitialized) {
+    LOG_E(
+        "Cannot call stpropnci_process before stpropnci_init! No processing.");
+    (void)pthread_mutex_unlock(&reentry_lock);
+    return ret;
+  }
+  LOG_I("Processing (hdr:%02hhx%02hhx%02hhx)", payload[0], payload[1],
+        payload[2]);
+
+  if (dir_from_upper == MSG_DIR_FROM_NFCC) {
+    // pass to pump first in case this acknowledges a sent message
+    stpropnci_pump_got(payload, payloadlen, &ret);
+  }
+
+  // if no cb registered with the cmd already handled the response,
+  // is there a generic module cb ?
+  if (!ret) {
+    const uint8_t* p = payload;
+    NCI_MSG_PRS_HDR0(p, mt, pbf, gid);
+    NCI_MSG_PRS_HDR1(p, oid);
+
+    // if a submodule callback handles it, stop here
+    ret = stpropnci_modcb_process(dir_from_upper, payload, payloadlen, mt, gid,
+                                  oid);
+  }
+
+  // otherwise, pass it to the modules normally
+  if (!ret) {
+    if ((mt != NCI_MT_DATA) && (gid == NCI_GID_PROP)) {
+      ret = stpropnci_process_prop(false, dir_from_upper, payload, payloadlen,
+                                   mt, oid);
+    } else {
+      ret = stpropnci_process_std(false, dir_from_upper, payload, payloadlen,
+                                  mt, gid, oid);
+    }
+  }
+
+  // if no module consumed it, we still process it to have the timer management.
+  if (!ret) {
+    ret = stpropnci_pump_post(dir_from_upper, payload, payloadlen, nullptr);
+  }
+
+  (void)pthread_mutex_unlock(&reentry_lock);
+  return ret;
+}
+
+/*******************************************************************************
+**
+** Function         stpropnci_inform
+**
+** Description      Just let the library know about a message but no handling
+**                  expected.
+**                  This is used by the HAL in its own wrapper processing.
+**                  This function is not reentrant; it will be blocking until
+**                  a previous call has returned.
+**
+** Parameters
+**  - dir_from_upper: if true, the payload is a CMD or DATA and coming from the
+**                    stack.
+**                    if false, it is RSP, NTF, or DATA and coming from NFCC.
+**  - payload: a buffer in the caller memory space.
+**             The memory can be freed after this function returns.
+**  - payloadlen: the length of data inside payload buffer.
+**
+** Returns          none
+**
+*******************************************************************************/
+void stpropnci_inform(bool dir_from_upper, const uint8_t* payload,
+                      const uint16_t payloadlen) {
+  uint8_t mt, pbf, gid, oid;
+  const uint8_t* p;
+
+  (void)pthread_mutex_lock(&reentry_lock);
+  if (!isInitialized) {
+    LOG_E("Cannot call stpropnci_inform before stpropnci_init! No processing.");
+    (void)pthread_mutex_unlock(&reentry_lock);
+    return;
+  }
+  LOG_I("Processing (hdr:%02hhx%02hhx%02hhx)", payload[0], payload[1],
+        payload[2]);
+
+  p = payload;
+  NCI_MSG_PRS_HDR0(p, mt, pbf, gid);
+  NCI_MSG_PRS_HDR1(p, oid);
+
+  if (gid == NCI_GID_PROP) {
+    stpropnci_process_prop(true, dir_from_upper, payload, payloadlen, mt, oid);
+  } else {
+    stpropnci_process_std(true, dir_from_upper, payload, payloadlen, mt, gid,
+                          oid);
+  }
+
+  (void)pthread_mutex_unlock(&reentry_lock);
+}

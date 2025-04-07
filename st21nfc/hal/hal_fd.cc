@@ -18,21 +18,24 @@
  ******************************************************************************/
 #define LOG_TAG "NfcHalFd"
 #include "hal_fd.h"
+
 #include <cutils/properties.h>
 #include <errno.h>
 #include <hardware/nfc.h>
 #include <string.h>
-#include <unistd.h>
 #include <sys/stat.h>
+#include <unistd.h>
+
 #include "android_logmsg.h"
-#include "halcore_private.h"
 #include "hal_auth.h"
+#include "hal_event_logger.h"
+#include "halcore_private.h"
 
 /* Initialize fw info structure pointer used to access fw info structure */
-FWInfo *mFWInfo = NULL;
-FILE *mFwFileBin;
-FILE *mCustomFileBin;
-FILE *mCustomFileTxt;
+FWInfo* mFWInfo = NULL;
+FILE* mFwFileBin;
+FILE* mCustomFileBin;
+FILE* mCustomFileTxt;
 fpos_t mPos;
 fpos_t mPosInit;
 uint8_t mBinData[260];
@@ -40,7 +43,7 @@ bool mRetry = true;
 bool mCustomParamFailed = false;
 bool mCustomParamDone = false;
 bool mIsFactoryLoader = false;
-uint8_t *pCmd;
+uint8_t* pCmd;
 int mFWRecovCount = 0;
 char mApduAuthent[24];
 static const uint8_t propNfcModeSetCmdOn[] = {0x2f, 0x02, 0x02, 0x02, 0x01};
@@ -103,12 +106,12 @@ static uint8_t ApduEraseUpgradeStart[] = {
 
 static uint8_t ApduEraseNfcArea[] = {0x2F, 0x04, 0x17, 0x84, 0x36, 0x00, 0x00,
                                      0x12, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00,
-                                     0x00, 0x04, 0x5E, 0x00, 0x4D, 0x83, 0xE1,
-                                     0x59, 0x62, 0xDC, 0x14, 0x64};
+                                     0x00, 0x04, 0x5C, 0x00, 0x38, 0x74, 0x3C,
+                                     0x0D, 0x5D, 0x4C, 0x7E, 0x48};
 
 static uint8_t ApduEraseUpgradeStop[] = {0x2F, 0x04, 0x0F, 0x80, 0x33, 0x00,
-                                         0x00, 0x0A, 0x00, 0x02, 0x97, 0x22,
-                                         0xC2, 0x5A, 0x2D, 0xA4, 0x09, 0x1A};
+                                         0x00, 0x0A, 0x00, 0x02, 0xCA, 0x07,
+                                         0xA1, 0xDA, 0x34, 0x50, 0xCB, 0xCF};
 
 static uint8_t ApduSetVariousConfig[] = {
     0x2F, 0x04, 0x11, 0x84, 0x74, 0x00, 0x00, 0x0C, 0x06, 0x02,
@@ -124,9 +127,9 @@ hal_fd_st54l_state_e mHalFD54LState = HAL_FD_ST54L_STATE_PUY_KEYUSER;
 int loader_patch_version = -1;
 int loader_patch_cmd_nb = 0;
 char loader_patch_AuthKeyId;
-const char **loader_patch;
-const char *loader_patch_size_tab;
-uint8_t *pCmdLd;
+const char** loader_patch;
+const char* loader_patch_size_tab;
+uint8_t* pCmdLd;
 int ld_count = 0;
 
 uint8_t txtCmd[MAX_BUFFER_SIZE];
@@ -137,12 +140,12 @@ char config_name_suffix[MAX_DATA_CONFIG_PATH_LEN];
 extern const int loader_RA7_patch_version;
 extern const int loader_RA7_patch_cmd_nb;
 extern const char loader_RA7_patch_AuthKeyId;
-extern const char *loader_RA7_patch[];
+extern const char* loader_RA7_patch[];
 extern const char loader_RA7_patch_size_tab[];
 extern const int loader_RA9_patch_version;
 extern const int loader_RA9_patch_cmd_nb;
 extern const char loader_RA9_patch_AuthKeyId;
-extern const char *loader_RA9_patch[];
+extern const char* loader_RA9_patch[];
 extern const char loader_RA9_patch_size_tab[];
 
 void SendExitLoadMode(HALHANDLE mmHalHandle);
@@ -165,7 +168,7 @@ static int ascii2hex(char c) {
   return res;
 }
 
-static const char *get_fw_default_name() {
+static const char* get_fw_default_name() {
   if ((mFWInfo->chipHwVersion == HW_ST54J) && (mFWInfo->chipAuthKeyId == 1)) {
     return "st54j_fw.bin";
   } else if ((mFWInfo->chipHwVersion == HW_NFCD) &&
@@ -183,7 +186,7 @@ static const char *get_fw_default_name() {
   }
 }
 
-static const char *get_fw_default_cfg_name() {
+static const char* get_fw_default_cfg_name() {
   if ((mFWInfo->chipHwVersion == HW_ST54L) ||
       (mFWInfo->chipHwVersion == HW_NFCL)) {
     return "st54l_conf.txt";
@@ -197,7 +200,7 @@ static const char *get_fw_default_cfg_name() {
   }
 }
 
-static const char *get_fw_template_cfg_name() {
+static const char* get_fw_template_cfg_name() {
   if ((mFWInfo->chipHwVersion == HW_ST54L) ||
       (mFWInfo->chipHwVersion == HW_NFCL)) {
     return "st54l_conf_%s.txt";
@@ -211,12 +214,12 @@ static const char *get_fw_template_cfg_name() {
   }
 }
 
-static int file_exist(const char *filename) {
+static int file_exist(const char* filename) {
   struct stat buffer;
   return (stat(filename, &buffer) == 0);
 }
 
-static int getconfiguration_id(char *config_file) {
+static int getconfiguration_id(char* config_file) {
   // generating a generic config file name based on the target details
   snprintf(config_file, MAX_DATA_CONFIG_PATH_LEN, get_fw_template_cfg_name(),
            config_name_suffix);
@@ -230,7 +233,7 @@ static int getconfiguration_id(char *config_file) {
  *                0 : Test sample
  *                1 : Product sample
  ***********************************************************************/
-static int GetProdType(uint8_t *UserKey) {
+static int GetProdType(uint8_t* UserKey) {
   int i, j;
   int status;
 
@@ -266,8 +269,7 @@ static void hal_fd_load_files() {
   int ret;
   STLOG_HAL_D("  %s - enter", __func__);
 
-  if (!GetStrValue(NAME_STNFC_FW_PATH_STORAGE, (char *)FwPath,
-                   sizeof(FwPath))) {
+  if (!GetStrValue(NAME_STNFC_FW_PATH_STORAGE, (char*)FwPath, sizeof(FwPath))) {
     STLOG_HAL_D(
         "%s - FW path not found in conf. use default location "
         "/vendor/firmware/ "
@@ -275,7 +277,7 @@ static void hal_fd_load_files() {
         __func__);
     strlcpy(FwPath, "/vendor/firmware/", sizeof(FwPath));
   }
-  if (!GetStrValue(NAME_STNFC_FW_CONF_STORAGE, (char *)ConfPath,
+  if (!GetStrValue(NAME_STNFC_FW_CONF_STORAGE, (char*)ConfPath,
                    sizeof(ConfPath))) {
     STLOG_HAL_D(
         "%s - FW config path not found in conf. use default location "
@@ -284,10 +286,10 @@ static void hal_fd_load_files() {
     strlcpy(ConfPath, "/vendor/etc/", sizeof(ConfPath));
   }
 
-  if (!GetStrValue(NAME_STNFC_FW_BIN_NAME, (char *)fwBinName,
+  if (!GetStrValue(NAME_STNFC_FW_BIN_NAME, (char*)fwBinName,
                    sizeof(fwBinName))) {
     // st21nfc_fw.bin or st21nfc_fw7.bin or st54j_fw.bin
-    const char *defaultfwfile = get_fw_default_name();
+    const char* defaultfwfile = get_fw_default_name();
     STLOG_HAL_D(
         "%s - FW binary file name not found in conf. use default name "
         "%s \n",
@@ -295,9 +297,9 @@ static void hal_fd_load_files() {
     strlcpy(fwBinName, defaultfwfile, sizeof(fwBinName));
   }
 
-  if (!GetStrValue(NAME_STNFC_FW_CONF_NAME, (char *)fwConfName,
+  if (!GetStrValue(NAME_STNFC_FW_CONF_NAME, (char*)fwConfName,
                    sizeof(fwConfName))) {
-    const char *defaultcfgfile = get_fw_default_cfg_name();
+    const char* defaultcfgfile = get_fw_default_cfg_name();
     STLOG_HAL_D(
         "%s - FW config file name not found in conf. use default name "
         "%s/%s\n",
@@ -317,7 +319,7 @@ static void hal_fd_load_files() {
       // absolute path
       strlcpy(ConfPath, fwConfName, sizeof(ConfPath));
     } else {
-      if (!GetStrValue(NAME_STNFC_FW_CONF_STORAGE, (char *)ConfPath,
+      if (!GetStrValue(NAME_STNFC_FW_CONF_STORAGE, (char*)ConfPath,
                        sizeof(ConfPath))) {
         strlcpy(ConfPath, "/vendor/etc/", sizeof(ConfPath));
       }
@@ -329,7 +331,7 @@ static void hal_fd_load_files() {
   STLOG_HAL_D("%s - FW config file = %s", __func__, ConfPath);
 
   // Check if FW patch binary file is present
-  if ((mFwFileBin = fopen((char *)FwPath, "r")) == NULL) {
+  if ((mFwFileBin = fopen((char*)FwPath, "r")) == NULL) {
     STLOG_HAL_D("%s - %s not detected", __func__, fwBinName);
   } else {
     STLOG_HAL_D("%s - %s file detected\n", __func__, fwBinName);
@@ -408,7 +410,7 @@ static void hal_fd_load_files() {
     }
   }
 
-  if ((mCustomFileBin = fopen((char *)ConfPath, "r")) != NULL) {
+  if ((mCustomFileBin = fopen((char*)ConfPath, "r")) != NULL) {
     char conf_line[600];
     uint16_t fwconf_crc = 0;
     if (fwConfName[strlen(fwConfName) - 1] == 't') {
@@ -454,7 +456,7 @@ int hal_fd_init() {
   STLOG_HAL_D("  %s - enter", __func__);
 
   // Initializing structure holding FW patch details
-  mFWInfo = (FWInfo *)malloc(sizeof(FWInfo));
+  mFWInfo = (FWInfo*)malloc(sizeof(FWInfo));
   if (mFWInfo == NULL) {
     STLOG_HAL_E("%s: malloc failed", __func__);
     return -1;
@@ -490,7 +492,7 @@ void hal_fd_close() {
   }
 }
 
-FWInfo *hal_fd_getFwInfo() {
+FWInfo* hal_fd_getFwInfo() {
   STLOG_HAL_D("  %s -enter", __func__);
   return mFWInfo;
 }
@@ -500,8 +502,8 @@ FWInfo *hal_fd_getFwInfo() {
  * @return FU_* instruction
  */
 
-uint8_t ft_cmd_HwReset(uint8_t *pdata, uint8_t *clf_mode, bool force,
-                       bool *router_mode_on) {
+uint8_t ft_cmd_HwReset(uint8_t* pdata, uint8_t* clf_mode, bool force,
+                       bool* router_mode_on) {
   bool params_needed = false;
   bool auth_requested = false;
   STLOG_HAL_D("  %s - execution", __func__);
@@ -761,7 +763,7 @@ uint8_t ft_cmd_HwReset(uint8_t *pdata, uint8_t *clf_mode, bool force,
 } /* ft_cmd_HwReset */
 
 void ExitHibernateEnterLoaderHandler(HALHANDLE mHalHandle, uint16_t data_len,
-                                     uint8_t *p_data) {
+                                     uint8_t* p_data) {
   STLOG_HAL_D("%s - Enter", __func__);
   if (data_len < 3) {
     STLOG_HAL_E("%s - Error, too short data (%d)", __func__, data_len);
@@ -786,7 +788,11 @@ void ExitHibernateEnterLoaderHandler(HALHANDLE mHalHandle, uint16_t data_len,
             "%s - send NCI_PROP_NFC_FW_UPDATE_CMD and use 100 ms timer for "
             "each cmd from here",
             __func__);
-
+        HalEventLogger::getInstance().log()
+            << __func__
+            << " send NCI_PROP_NFC_FW_UPDATE_CMD and use 100 ms timer for "
+               "each cmd from here "
+            << std::endl;
         if (!HalSendDownstreamTimer(mHalHandle, NciPropNfcFwUpdate,
                                     sizeof(NciPropNfcFwUpdate),
                                     FW_TIMER_DURATION)) {
@@ -832,7 +838,7 @@ void ExitHibernateEnterLoaderHandler(HALHANDLE mHalHandle, uint16_t data_len,
 }
 
 void ExitHibernateOnlyHandler(HALHANDLE mHalHandle, uint16_t data_len,
-                              uint8_t *p_data) {
+                              uint8_t* p_data) {
   // We are called initially when:
   //   - CLF is in router mode, with MODE set to USB CHARGING or OFF
   //   - Core Init Cmd has been sent already.
@@ -848,6 +854,8 @@ void ExitHibernateOnlyHandler(HALHANDLE mHalHandle, uint16_t data_len,
       // CORE_INIT_RSP
       if ((p_data[1] == 0x1) && (p_data[3] == 0x0)) {
         // Send PROP_NFC_MODE_SET_CMD(ON)
+        HalEventLogger::getInstance().log()
+            << __func__ << " Sending PROP_NFC_MODE_SET_CMD" << std::endl;
         if (!HalSendDownstream(mHalHandle, propNfcModeSetCmdOn,
                                sizeof(propNfcModeSetCmdOn))) {
           STLOG_HAL_E("%s - SendDownstream failed", __func__);
@@ -874,13 +882,23 @@ void ExitHibernateOnlyHandler(HALHANDLE mHalHandle, uint16_t data_len,
   }
 }
 
+/*******************************************************************************
+**
+** Function         resetHandlerState
+**
+** Description      Reset FW update state.
+**
+** Parameters       void
+**
+**
+*******************************************************************************/
 void resetHandlerState() {
   STLOG_HAL_D("%s", __func__);
   mHalFDState = HAL_FD_STATE_AUTHENTICATE;
   mHalFD54LState = HAL_FD_ST54L_STATE_PUY_KEYUSER;
 }
 
-void LdUpdateHandler(HALHANDLE mHalHandle, uint16_t data_len, uint8_t *p_data) {
+void LdUpdateHandler(HALHANDLE mHalHandle, uint16_t data_len, uint8_t* p_data) {
   STLOG_HAL_D("%s : Enter state = %d", __func__, mHalFDState);
   HalSendDownstreamStopTimer(mHalHandle);
 
@@ -889,7 +907,7 @@ void LdUpdateHandler(HALHANDLE mHalHandle, uint16_t data_len, uint8_t *p_data) {
       STLOG_HAL_D("%s - mHalFDState = HAL_FD_STATE_AUTHENTICATE", __func__);
       if ((p_data[data_len - 2] == 0x90) && (p_data[data_len - 1] == 0x00)) {
         STLOG_HAL_D("%s - send APDU_AUTHENTICATION_CMD", __func__);
-        if (!HalSendDownstreamTimer(mHalHandle, (uint8_t *)mApduAuthent,
+        if (!HalSendDownstreamTimer(mHalHandle, (uint8_t*)mApduAuthent,
                                     sizeof(mApduAuthent), FW_TIMER_DURATION)) {
           STLOG_HAL_E("%s - SendDownstream failed", __func__);
         }
@@ -973,7 +991,7 @@ void LdUpdateHandler(HALHANDLE mHalHandle, uint16_t data_len, uint8_t *p_data) {
             STLOG_HAL_E("NFC-NCI HAL: %s  SendDownstream failed", __func__);
           }
           mHalFDState = HAL_FD_STATE_SEND_RAW_APDU;
-          pCmdLd = (uint8_t *)loader_patch;
+          pCmdLd = (uint8_t*)loader_patch;
         } else {
           STLOG_HAL_D("%s : FW flash not succeeded", __func__);
           SendExitLoadMode(mHalHandle);
@@ -1032,8 +1050,20 @@ void LdUpdateHandler(HALHANDLE mHalHandle, uint16_t data_len, uint8_t *p_data) {
   }
 }
 
+/*******************************************************************************
+**
+** Function         UpdateHandler
+**
+** Description      Handler to update ST21NFCD/ST54J NFCC FW.
+**
+** Parameters       mHalHandle - HAL handle
+**                  data_len   - Buffer length
+**                  p_data     - Data buffer from NFCC
+**
+**
+*******************************************************************************/
 static void UpdateHandler(HALHANDLE mHalHandle, uint16_t data_len,
-                          uint8_t *p_data) {
+                          uint8_t* p_data) {
   STLOG_HAL_D("%s : Enter state = %d", __func__, mHalFDState);
   HalSendDownstreamStopTimer(mHalHandle);
 
@@ -1043,7 +1073,9 @@ static void UpdateHandler(HALHANDLE mHalHandle, uint16_t data_len,
 
       if ((p_data[data_len - 2] == 0x90) && (p_data[data_len - 1] == 0x00)) {
         STLOG_HAL_D("%s - send APDU_AUTHENTICATION_CMD", __func__);
-        if (!HalSendDownstreamTimer(mHalHandle, (uint8_t *)mApduAuthent,
+        HalEventLogger::getInstance().log()
+            << __func__ << " send APDU_AUTHENTICATION_CMD " << std::endl;
+        if (!HalSendDownstreamTimer(mHalHandle, (uint8_t*)mApduAuthent,
                                     sizeof(mApduAuthent), FW_TIMER_DURATION)) {
           STLOG_HAL_E("%s - SendDownstream failed", __func__);
         }
@@ -1136,6 +1168,8 @@ static void UpdateHandler(HALHANDLE mHalHandle, uint16_t data_len,
           if ((fread(mBinData, sizeof(uint8_t), 3, mFwFileBin) == 3) &&
               (fread(mBinData + 3, sizeof(uint8_t), mBinData[2], mFwFileBin) ==
                mBinData[2])) {
+            HalEventLogger::getInstance().log()
+                << __func__ << "  LINE: " << __LINE__ << std::endl;
             if (!HalSendDownstreamTimer(mHalHandle, mBinData, mBinData[2] + 3,
                                         FW_TIMER_DURATION)) {
               STLOG_HAL_E("%s - SendDownstream failed", __func__);
@@ -1151,6 +1185,8 @@ static void UpdateHandler(HALHANDLE mHalHandle, uint16_t data_len,
           if ((fread(mBinData, sizeof(uint8_t), 3, mFwFileBin) == 3) &&
               (fread(mBinData + 3, sizeof(uint8_t), mBinData[2], mFwFileBin) ==
                mBinData[2])) {
+            HalEventLogger::getInstance().log()
+                << __func__ << " Last Tx was NOK. Retry " << std::endl;
             if (!HalSendDownstreamTimer(mHalHandle, mBinData, mBinData[2] + 3,
                                         FW_TIMER_DURATION)) {
               STLOG_HAL_E("%s - SendDownstream failed", __func__);
@@ -1171,8 +1207,8 @@ static void UpdateHandler(HALHANDLE mHalHandle, uint16_t data_len,
       STLOG_HAL_D("%s - mHalFDState = HAL_FD_STATE_EXIT_APDU", __func__);
       if ((p_data[data_len - 2] != 0x90) || (p_data[data_len - 1] != 0x00)) {
         STLOG_HAL_D(
-            "%s - Error exiting loader mode, i.e. a problem occured during FW "
-            "update",
+            "%s - Error exiting loader mode, i.e. a problem occurred"
+            "during FW update",
             __func__);
       }
 
@@ -1189,14 +1225,29 @@ static void UpdateHandler(HALHANDLE mHalHandle, uint16_t data_len,
   }
 }
 
+/*******************************************************************************
+**
+** Function         UpdateHandlerST54L
+**
+** Description      Handler to update ST54L NFCC FW.
+**
+** Parameters       mHalHandle - HAL handle
+**                  data_len   - Buffer length
+**                  p_data     - Data buffer from NFCC
+**
+**
+*******************************************************************************/
 static void UpdateHandlerST54L(HALHANDLE mHalHandle, uint16_t data_len,
-                               uint8_t *p_data) {
+                               uint8_t* p_data) {
   STLOG_HAL_D("%s : Enter state = %d", __func__, mHalFD54LState);
 
   switch (mHalFD54LState) {
     case HAL_FD_ST54L_STATE_PUY_KEYUSER:
+      HalEventLogger::getInstance().log()
+          << __func__ << " mHalFD54LState: " << HAL_FD_ST54L_STATE_PUY_KEYUSER
+          << std::endl;
       if (!HalSendDownstreamTimer(
-              mHalHandle, (uint8_t *)ApduPutKeyUser1[mFWInfo->chipProdType],
+              mHalHandle, (uint8_t*)ApduPutKeyUser1[mFWInfo->chipProdType],
               sizeof(ApduPutKeyUser1[mFWInfo->chipProdType]),
               FW_TIMER_DURATION)) {
         STLOG_HAL_E("%s - SendDownstream failed", __func__);
@@ -1206,9 +1257,13 @@ static void UpdateHandlerST54L(HALHANDLE mHalHandle, uint16_t data_len,
 
     case HAL_FD_ST54L_STATE_ERASE_UPGRADE_START:
       if ((p_data[data_len - 2] == 0x90) && (p_data[data_len - 1] == 0x00)) {
-        if (!HalSendDownstreamTimer(
-                mHalHandle, (uint8_t *)ApduEraseUpgradeStart,
-                sizeof(ApduEraseUpgradeStart), FW_TIMER_DURATION)) {
+        HalEventLogger::getInstance().log()
+            << __func__
+            << " mHalFD54LState: " << HAL_FD_ST54L_STATE_ERASE_UPGRADE_START
+            << std::endl;
+        if (!HalSendDownstreamTimer(mHalHandle, (uint8_t*)ApduEraseUpgradeStart,
+                                    sizeof(ApduEraseUpgradeStart),
+                                    FW_TIMER_DURATION)) {
           STLOG_HAL_E("%s - SendDownstream failed", __func__);
         }
         mHalFD54LState = HAL_FD_ST54L_STATE_ERASE_NFC_AREA;
@@ -1220,7 +1275,11 @@ static void UpdateHandlerST54L(HALHANDLE mHalHandle, uint16_t data_len,
 
     case HAL_FD_ST54L_STATE_ERASE_NFC_AREA:
       if ((p_data[data_len - 2] == 0x90) && (p_data[data_len - 1] == 0x00)) {
-        if (!HalSendDownstreamTimer(mHalHandle, (uint8_t *)ApduEraseNfcArea,
+        HalEventLogger::getInstance().log()
+            << __func__
+            << " mHalFD54LState: " << HAL_FD_ST54L_STATE_ERASE_NFC_AREA
+            << std::endl;
+        if (!HalSendDownstreamTimer(mHalHandle, (uint8_t*)ApduEraseNfcArea,
                                     sizeof(ApduEraseNfcArea),
                                     FW_TIMER_DURATION)) {
           STLOG_HAL_E("%s - SendDownstream failed", __func__);
@@ -1234,7 +1293,11 @@ static void UpdateHandlerST54L(HALHANDLE mHalHandle, uint16_t data_len,
 
     case HAL_FD_ST54L_STATE_ERASE_UPGRADE_STOP:
       if ((p_data[data_len - 2] == 0x90) && (p_data[data_len - 1] == 0x00)) {
-        if (!HalSendDownstreamTimer(mHalHandle, (uint8_t *)ApduEraseUpgradeStop,
+        HalEventLogger::getInstance().log()
+            << __func__
+            << " mHalFD54LState: " << HAL_FD_ST54L_STATE_ERASE_UPGRADE_STOP
+            << std::endl;
+        if (!HalSendDownstreamTimer(mHalHandle, (uint8_t*)ApduEraseUpgradeStop,
                                     sizeof(ApduEraseUpgradeStop),
                                     FW_TIMER_DURATION)) {
           STLOG_HAL_E("%s - SendDownstream failed", __func__);
@@ -1260,14 +1323,18 @@ static void UpdateHandlerST54L(HALHANDLE mHalHandle, uint16_t data_len,
           if ((fread(mBinData, sizeof(uint8_t), 3, mFwFileBin) == 3) &&
               (fread(mBinData + 3, sizeof(uint8_t), mBinData[2], mFwFileBin) ==
                mBinData[2])) {
+            HalEventLogger::getInstance().log()
+                << __func__ << "  LINE: " << __LINE__ << std::endl;
             if (!HalSendDownstreamTimer(mHalHandle, mBinData, mBinData[2] + 3,
                                         FW_TIMER_DURATION)) {
               STLOG_HAL_E("%s - SendDownstream failed", __func__);
             }
           } else {
             STLOG_HAL_D("%s - EOF of FW binary", __func__);
+            HalEventLogger::getInstance().log()
+                << __func__ << "  EOF of FW binary " << std::endl;
             if (!HalSendDownstreamTimer(
-                    mHalHandle, (uint8_t *)ApduSetVariousConfig,
+                    mHalHandle, (uint8_t*)ApduSetVariousConfig,
                     sizeof(ApduSetVariousConfig), FW_TIMER_DURATION)) {
               STLOG_HAL_E("%s - SendDownstream failed", __func__);
             }
@@ -1280,6 +1347,8 @@ static void UpdateHandlerST54L(HALHANDLE mHalHandle, uint16_t data_len,
           if ((fread(mBinData, sizeof(uint8_t), 3, mFwFileBin) == 3) &&
               (fread(mBinData + 3, sizeof(uint8_t), mBinData[2], mFwFileBin) ==
                mBinData[2])) {
+            HalEventLogger::getInstance().log()
+                << __func__ << "  Last Tx was NOK. Retry " << std::endl;
             if (!HalSendDownstreamTimer(mHalHandle, mBinData, mBinData[2] + 3,
                                         FW_TIMER_DURATION)) {
               STLOG_HAL_E("%s - SendDownstream failed", __func__);
@@ -1287,8 +1356,10 @@ static void UpdateHandlerST54L(HALHANDLE mHalHandle, uint16_t data_len,
             fgetpos(mFwFileBin, &mPos);  // save current position in stream
           } else {
             STLOG_HAL_D("%s - EOF of FW binary", __func__);
+            HalEventLogger::getInstance().log()
+                << __func__ << "  LINE: " << __LINE__ << std::endl;
             if (!HalSendDownstreamTimer(
-                    mHalHandle, (uint8_t *)ApduSetVariousConfig,
+                    mHalHandle, (uint8_t*)ApduSetVariousConfig,
                     sizeof(ApduSetVariousConfig), FW_TIMER_DURATION)) {
               STLOG_HAL_E("%s - SendDownstream failed", __func__);
             }
@@ -1312,7 +1383,7 @@ static void UpdateHandlerST54L(HALHANDLE mHalHandle, uint16_t data_len,
     case HAL_FD_ST54L_STATE_SWITCH_TO_USER:
       if ((p_data[data_len - 2] != 0x90) || (p_data[data_len - 1] != 0x00)) {
         STLOG_HAL_D(
-            "%s - Error exiting loader mode, i.e. a problem occured during FW "
+            "%s - Error exiting loader mode, i.e. a problem occurred during FW "
             "update",
             __func__);
       }
@@ -1330,7 +1401,19 @@ static void UpdateHandlerST54L(HALHANDLE mHalHandle, uint16_t data_len,
   }
 }
 
-void FwUpdateHandler(HALHANDLE mHalHandle, uint16_t data_len, uint8_t *p_data) {
+/*******************************************************************************
+**
+** Function         FwUpdateHandler
+**
+** Description      Handler to update NFCC FW.
+**
+** Parameters       mHalHandle - HAL handle
+**                  data_len   - Buffer length
+**                  p_data     - Data buffer from NFCC
+**
+**
+*******************************************************************************/
+void FwUpdateHandler(HALHANDLE mHalHandle, uint16_t data_len, uint8_t* p_data) {
   if ((mFWInfo->chipHwVersion == HW_ST54L) ||
       (mFWInfo->chipHwVersion == HW_NFCL)) {
     UpdateHandlerST54L(mHalHandle, data_len, p_data);
@@ -1347,9 +1430,9 @@ void FwUpdateHandler(HALHANDLE mHalHandle, uint16_t data_len, uint8_t *p_data) {
  * @param maxLen, storage size of pCmd
  * @param pcmdlen, how many bytes have been written upon return.
  * @return 0 on success, -1 on failure */
-static int convstr2hex(char *input, uint8_t *pCmd, int maxLen,
-                       uint16_t *pcmdlen) {
-  char *in = input;
+static int convstr2hex(char* input, uint8_t* pCmd, int maxLen,
+                       uint16_t* pcmdlen) {
+  char* in = input;
   int c;
   *pcmdlen = 0;
 
@@ -1391,7 +1474,7 @@ static int convstr2hex(char *input, uint8_t *pCmd, int maxLen,
   return 0;
 }
 
-int ft_FwConfConvertor(char *string_cmd, uint8_t pCmd[256], uint16_t *pcmdlen) {
+int ft_FwConfConvertor(char* string_cmd, uint8_t pCmd[256], uint16_t* pcmdlen) {
   uint16_t converted;
   int res = convstr2hex(string_cmd, pCmd + 3, 256 - 3, &converted);
   if (res < 0) {
@@ -1407,7 +1490,7 @@ int ft_FwConfConvertor(char *string_cmd, uint8_t pCmd[256], uint16_t *pcmdlen) {
 }
 // parse st21nfc_conf.txt until next command to send.
 // return 1 if a command was found, 0 if EOF
-int getNextCommandInTxt(uint8_t *cmd, uint16_t *sz) {
+int getNextCommandInTxt(uint8_t* cmd, uint16_t* sz) {
   int ret = 0;
   // f_cust_txt is already opened and 1st line read
   char conf_line[600];
@@ -1415,12 +1498,12 @@ int getNextCommandInTxt(uint8_t *cmd, uint16_t *sz) {
   while (fgets(conf_line, sizeof conf_line, mCustomFileTxt) != NULL) {
     if (!strncmp(conf_line, "NCI_SEND_PROP", sizeof("NCI_SEND_PROP") - 1)) {
       STLOG_HAL_V("%s : parse %s", __func__, conf_line);
-      ret = ft_FwConfConvertor((char *)conf_line + 20, cmd, sz);
+      ret = ft_FwConfConvertor((char*)conf_line + 20, cmd, sz);
       break;
     } else if (!strncmp(conf_line, "NCI_DIRECT_CTRL",
                         sizeof("NCI_DIRECT_CTRL") - 1)) {
       STLOG_HAL_V("%s : parse %s", __func__, conf_line);
-      ret = ft_FwConfConvertor((char *)conf_line + 22, cmd, sz);
+      ret = ft_FwConfConvertor((char*)conf_line + 22, cmd, sz);
       break;
     } else {
       // any other, we ignore
@@ -1431,7 +1514,7 @@ int getNextCommandInTxt(uint8_t *cmd, uint16_t *sz) {
   return ret;
 }
 void ApplyCustomParamHandler(HALHANDLE mHalHandle, uint16_t data_len,
-                             uint8_t *p_data) {
+                             uint8_t* p_data) {
   STLOG_HAL_D("%s - Enter ", __func__);
   if (data_len < 3) {
     STLOG_HAL_E("%s : Error, too short data (%d)", __func__, data_len);
@@ -1587,7 +1670,7 @@ void ApplyCustomParamHandler(HALHANDLE mHalHandle, uint16_t data_len,
 
 void SendExitLoadMode(HALHANDLE mmHalHandle) {
   STLOG_HAL_D("%s - Send APDU_EXIT_LOAD_MODE_CMD", __func__);
-
+  HalEventLogger::getInstance().log() << __func__ << std::endl;
   if (!HalSendDownstreamTimer(mmHalHandle, ApduExitLoadMode,
                               sizeof(ApduExitLoadMode), FW_TIMER_DURATION)) {
     STLOG_HAL_E("%s - SendDownstream failed", __func__);
@@ -1596,6 +1679,7 @@ void SendExitLoadMode(HALHANDLE mmHalHandle) {
 }
 
 void BackToFactoryLoaderIfPossible(HALHANDLE mmHalHandle) {
+  HalEventLogger::getInstance().log() << __func__ << std::endl;
   if (!mIsFactoryLoader) {
     STLOG_HAL_D("%s - Reset to factory loader", __func__);
     hal_wrapper_set_state(HAL_WRAPPER_STATE_OPEN);
@@ -1609,7 +1693,7 @@ void BackToFactoryLoaderIfPossible(HALHANDLE mmHalHandle) {
 
 void SendSwitchToUserMode(HALHANDLE mmHalHandle) {
   STLOG_HAL_D("%s: enter", __func__);
-
+  HalEventLogger::getInstance().log() << __func__ << std::endl;
   if (!HalSendDownstreamTimer(mmHalHandle, ApduSwitchToUser,
                               sizeof(ApduSwitchToUser), FW_TIMER_DURATION)) {
     STLOG_HAL_E("%s - SendDownstream failed", __func__);

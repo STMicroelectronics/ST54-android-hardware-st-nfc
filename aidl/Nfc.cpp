@@ -20,6 +20,9 @@
 
 #include "StNfc_hal_api.h"
 
+extern bool mHalReplay;
+void HalReplayOnDeath();
+
 namespace aidl {
 namespace android {
 namespace hardware {
@@ -47,6 +50,9 @@ void OnDeath(void* cookie) {
       LOG(INFO) << __func__ << " Nfc service has died";
       pthread_mutex_unlock(&mLockOpenClose);
       mCookie->nfc->close(NfcCloseType::DISABLE);
+      if (mHalReplay) {
+        HalReplayOnDeath();
+      }
       return;
     }
   }
@@ -183,6 +189,15 @@ void OnDeath(void* cookie) {
   return ndk::ScopedAStatus::ok();
 }
 
+::ndk::ScopedAStatus Nfc::controlGranted(NfcStatus* _aidl_return) {
+  LOG(INFO) << "controlGranted";
+  return ndk::ScopedAStatus::ok();
+}
+
+binder_status_t Nfc::dump(int fd, const char**, uint32_t) {
+  StNfc_hal_dump(fd);
+  return STATUS_OK;
+}
 }  // namespace nfc
 }  // namespace hardware
 }  // namespace android

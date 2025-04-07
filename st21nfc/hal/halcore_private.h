@@ -23,6 +23,7 @@
 #include <semaphore.h>
 #include <stdint.h>
 #include <time.h>
+
 #include "halcore.h"
 
 #define MAX_NCIFRAME_PAYLOAD_SIZE 255
@@ -76,7 +77,7 @@ typedef struct tagThreadMessage {
   const void* payload; /* ptr to message related data item */
   size_t length;       /* length of above payload */
   HalBuffer* buffer;   /* buffer object (optional) */
-} ThreadMesssage;
+} ThreadMessage;
 
 typedef enum {
   EVT_RX_DATA = 0,
@@ -117,7 +118,7 @@ typedef struct tagHalInstance {
   sem_t upstreamBlock;
 
   /* message ring-buffer */
-  ThreadMesssage ring[HAL_QUEUE_MAX];
+  ThreadMessage ring[HAL_QUEUE_MAX];
   int ringReadPos;
   int ringWritePos;
 

@@ -20,12 +20,17 @@
  *
  *
  ******************************************************************************/
+#include "config.h"
+
+#include <android-base/properties.h>
 #include <log/log.h>
 #include <stdio.h>
 #include <sys/stat.h>
+
 #include <list>
 #include <string>
 #include <vector>
+
 #include "android_logmsg.h"
 
 const char alternative_config_path[] = "";
@@ -35,7 +40,7 @@ const int transport_config_path_size =
     (sizeof(transport_config_paths) / sizeof(transport_config_paths[0]));
 bool mAscii;
 #define config_name "libnfc-hal-st.conf"
-#define extra_config_base "libnfc-st-"
+#define extra_config_base "libnfc-hal-st-"
 #define extra_config_ext ".conf"
 #define IsStringValue 0x80000000
 
@@ -52,7 +57,7 @@ bool mAscii;
 
 using namespace ::std;
 
-void findConfigFile(const string& configName, string& filePath);
+bool findConfigFile(const string& configName, string& filePath);
 
 class CNfcParam : public string {
  public:
@@ -242,17 +247,18 @@ inline int getDigitValue(char c, int base) {
 ** Returns:     none
 **
 *******************************************************************************/
-void findConfigFile(const string& configName, string& filePath) {
+bool findConfigFile(const string& configName, string& filePath) {
   for (int i = 0; i < transport_config_path_size - 1; i++) {
+    if (configName.empty()) break;
     filePath.assign(transport_config_paths[i]);
     filePath += configName;
     struct stat file_stat;
     if (stat(filePath.c_str(), &file_stat) == 0 && S_ISREG(file_stat.st_mode)) {
-      return;
+      return true;
     }
   }
-  filePath.assign(transport_config_paths[transport_config_path_size - 1]);
-  filePath += configName;
+  filePath = "";
+  return false;
 }
 
 /*******************************************************************************
@@ -480,6 +486,7 @@ CNfcConfig& CNfcConfig::GetInstance() {
 
   if (theInstance.size() == 0 && theInstance.mValidFile) {
     string strPath;
+    bool found = false;
     if (alternative_config_path[0] != '\0') {
       strPath.assign(alternative_config_path);
       strPath += config_name;
@@ -488,22 +495,38 @@ CNfcConfig& CNfcConfig::GetInstance() {
         return theInstance;
       }
     }
-    // check platform-specific config file
-    theInstance.getconfiguration_id(config_name_suffix);
 
-    snprintf(config_name_generic, MAX_DATA_CONFIG_PATH_LEN,
-             "libnfc-hal-st-%s.conf", config_name_suffix);
-
-    findConfigFile(config_name_generic, strPath);
-    if ((theInstance.file_exist(strPath.c_str()))) {
-      STLOG_HAL_D("%s config file found = %s\n", __func__, strPath.c_str());
-      theInstance.readConfig(strPath.c_str(), true);
-      return theInstance;
+    if (!found) {
+      // check if sysconf gives the config to use
+      found = findConfigFile(
+          android::base::GetProperty("persist.vendor.nfc.config_file_name", ""),
+          strPath);
+    }
+    if (!found) {
+      // check SKU-specific config file
+      found = findConfigFile(
+          extra_config_base +
+              android::base::GetProperty("ro.boot.product.hardware.sku", "") +
+              extra_config_ext,
+          strPath);
     }
 
-    // Use the default config file.
-    findConfigFile(config_name, strPath);
-    STLOG_HAL_D("%s found %s \n", __func__, strPath.c_str());
+    if (!found) {
+      // check platform-specific config file
+      theInstance.getconfiguration_id(config_name_suffix);
+
+      snprintf(config_name_generic, MAX_DATA_CONFIG_PATH_LEN,
+               "libnfc-hal-st-%s.conf", config_name_suffix);
+
+      found = findConfigFile(config_name_generic, strPath);
+    }
+
+    if (!found) {
+      // Use the default config file.
+      found = findConfigFile(config_name, strPath);
+    }
+
+    STLOG_HAL_D("%s using %s \n", __func__, strPath.c_str());
     theInstance.readConfig(strPath.c_str(), true);
   }
   return theInstance;

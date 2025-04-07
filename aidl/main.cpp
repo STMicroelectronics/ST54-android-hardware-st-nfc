@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#define LOG_TAG "stnfc@aidl-service.st"
 #include <android-base/logging.h>
 #include <android-base/properties.h>
 #include <android/binder_manager.h>
@@ -34,13 +35,17 @@ using ::aidl::android::hardware::nfc::Nfc;
 typedef int (*STEseReset)(void);
 
 int main() {
+  void* stdll = nullptr;
   LOG(INFO) << "NFC AIDL HAL Service is starting up";
 
   std::string valueStr =
       android::base::GetProperty("persist.vendor.nfc.streset", "");
   if (valueStr.length() > 0) {
-    valueStr = VENDOR_LIB_PATH + valueStr + VENDOR_LIB_EXT;
-    void* stdll = dlopen(valueStr.c_str(), RTLD_NOW);
+    stdll = dlopen(valueStr.c_str(), RTLD_NOW);
+    if (!stdll) {
+      valueStr = VENDOR_LIB_PATH + valueStr + VENDOR_LIB_EXT;
+      stdll = dlopen(valueStr.c_str(), RTLD_NOW);
+    }
     if (stdll) {
       LOG(INFO) << "ST NFC HAL STReset starting.";
       STEseReset fn = (STEseReset)dlsym(stdll, "boot_reset");
@@ -58,9 +63,11 @@ int main() {
   std::shared_ptr<Nfc> nfc_service = ndk::SharedRefBase::make<Nfc>();
 
   const std::string instance = std::string() + Nfc::descriptor + "/default";
-  binder_status_t status = AServiceManager_addService(
+
+  binder_status_t status = AServiceManager_registerLazyService(
       nfc_service->asBinder().get(), instance.c_str());
-  CHECK(status == STATUS_OK);
+  CHECK_EQ(status, STATUS_OK) << "Failed to register LAZY NFC HAL";
+
   ABinderProcess_joinThreadPool();
   return 0;
 }

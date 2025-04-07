@@ -23,10 +23,11 @@
 #include <semaphore.h>
 #include <stdlib.h>
 #include <string.h>
+
 #include "android_logmsg.h"
+#include "hal_fd.h"
 #include "halcore_private.h"
 #include "st21nfc_dev.h"
-#include "hal_fd.h"
 
 extern int I2cWriteCmd(const uint8_t* x, size_t len);
 extern void DispHal(const char* title, const void* data, size_t length);
@@ -37,17 +38,10 @@ extern void HalReplayTxData(uint8_t* data, int length);
 extern uint32_t ScrProtocolTraceFlag;  // = SCR_PROTO_TRACE_ALL;
 extern pthread_mutex_t i2cguard_write;
 extern bool mHalReplay;
+extern bool is_st_stack;
 
 // HAL WRAPPER
 static void HalStopTimer(HalInstance* inst);
-
-uint8_t NCI_ANDROID_GET_CAPS[] = {0x2f, 0x0c, 0x01, 0x0};
-uint8_t NCI_ANDROID_GET_CAPS_RSP[] = {
-    0x4f, 0x0c, 0x0e, 0x00, 0x00, 0x00,
-    0x00, 0x03, 0x00, 0x01, 0x01,  // Passive Observe mode
-    0x01, 0x01, 0x01,              // Polling frame ntf
-    0x03, 0x01, 0x00               // Autotransact polling loop filter
-};
 
 /**************************************************************************************************
  *
@@ -61,11 +55,14 @@ static inline int sem_wait_nointr(sem_t* sem);
 static void HalOnNewUpstreamFrame(HalInstance* inst, const uint8_t* data,
                                   size_t length);
 static void HalTriggerNextDsPacket(HalInstance* inst);
-static bool HalEnqueueThreadMessage(HalInstance* inst, ThreadMesssage* msg);
-static bool HalDequeueThreadMessage(HalInstance* inst, ThreadMesssage* msg);
+static bool HalEnqueueThreadMessage(HalInstance* inst, ThreadMessage* msg);
+static bool HalDequeueThreadMessage(HalInstance* inst, ThreadMessage* msg);
 static HalBuffer* HalAllocBuffer(HalInstance* inst);
 static HalBuffer* HalFreeBuffer(HalInstance* inst, HalBuffer* b);
 static uint32_t HalSemWait(sem_t* pSemaphore, uint32_t timeout);
+
+extern uint8_t propmsg[258];
+extern uint16_t propmsgLen;
 
 /**************************************************************************************************
  *
@@ -95,26 +92,21 @@ void HalCoreCallback(void* context, uint32_t event, const void* d,
     case HAL_EVENT_DSWRITE:
       STLOG_HAL_V("!! got event HAL_EVENT_DSWRITE for %zu bytes\n", length);
       if (!mHalReplay) {
-        if (length == 4 &&
-            !memcmp(data, NCI_ANDROID_GET_CAPS, sizeof(NCI_ANDROID_GET_CAPS))) {
-          DispHal("TX DATA HAL", (data), length);
-          dev->p_data_cback(NCI_ANDROID_GET_CAPS_RSP[2] + 3,
-                            NCI_ANDROID_GET_CAPS_RSP);
-        } else {
-          DispHal("TX DATA", (data), length);
-          // Send write command to IO thread
-          cmd = 'W';
-          (void)pthread_mutex_lock(&i2cguard_write);
-          I2cWriteCmd(&cmd, sizeof(cmd));
-          I2cWriteCmd((const uint8_t*)&length, sizeof(length));
-          I2cWriteCmd(data, length);
-          (void)pthread_mutex_unlock(&i2cguard_write);
-        }
+        // Log message Hal to NFCC
+        DispHal("TX DATA H2K", (data), length);
+        // Send write command to IO thread
+        cmd = 'W';
+        (void)pthread_mutex_lock(&i2cguard_write);
+        I2cWriteCmd(&cmd, sizeof(cmd));
+        I2cWriteCmd((const uint8_t*)&length, sizeof(length));
+        I2cWriteCmd(data, length);
+        (void)pthread_mutex_unlock(&i2cguard_write);
       }
       break;
     case HAL_EVENT_DATAIND:
       if (mHalReplay) {
-        DispHal("RX DATA HAL", data, length);
+        // Log message Replay to Stack
+        DispHal("RX DATA R2H", data, length);
       }
       STLOG_HAL_V("!! got event HAL_EVENT_DATAIND for %zu bytes\n", length);
 
@@ -163,6 +155,8 @@ void HalCoreCallback(void* context, uint32_t event, const void* d,
  */
 HALHANDLE HalCreate(void* context, HAL_CALLBACK callback, uint32_t flags) {
   STLOG_HAL_V("%s; enter", __func__);
+
+  is_st_stack = false;
 
   HalInstance* inst = (HalInstance*)calloc(1, sizeof(HalInstance));
 
@@ -262,7 +256,7 @@ HALHANDLE HalCreate(void* context, HAL_CALLBACK callback, uint32_t flags) {
 void HalDestroy(HALHANDLE hHAL) {
   HalInstance* inst = (HalInstance*)hHAL;
   // Tell the thread that we want to finish
-  ThreadMesssage msg;
+  ThreadMessage msg;
   msg.command = MSG_EXIT_REQUEST;
   msg.payload = 0;
   msg.length = 0;
@@ -300,9 +294,13 @@ void HalDestroy(HALHANDLE hHAL) {
 bool HalSendDownstream(HALHANDLE hHAL, const uint8_t* data, size_t size) {
   // Send an NCI frame downstream. will
   HalInstance* inst = (HalInstance*)hHAL;
+  if (inst == nullptr) {
+    STLOG_HAL_E("HalInstance is null.");
+    return false;
+  }
 
   if ((size <= MAX_BUFFER_SIZE) && (size > 0)) {
-    ThreadMesssage msg;
+    ThreadMessage msg;
     HalBuffer* b = HalAllocBuffer(inst);
 
     if (!b) {
@@ -342,7 +340,7 @@ bool HalSendDownstreamTimer(HALHANDLE hHAL, const uint8_t* data, size_t size,
   HalInstance* inst = (HalInstance*)hHAL;
 
   if ((size <= MAX_BUFFER_SIZE) && (size > 0)) {
-    ThreadMesssage msg;
+    ThreadMessage msg;
     HalBuffer* b = HalAllocBuffer(inst);
 
     if (!b) {
@@ -370,7 +368,7 @@ bool HalSendDownstreamTimer(HALHANDLE hHAL, const uint8_t* data, size_t size,
 bool HalSendDownstreamTimer(HALHANDLE hHAL, uint32_t duration) {
   HalInstance* inst = (HalInstance*)hHAL;
 
-  ThreadMesssage msg;
+  ThreadMessage msg;
 
   msg.command = MSG_TIMER_START;
   msg.payload = 0;
@@ -404,7 +402,7 @@ bool HalSendDownstreamStopTimer(HALHANDLE hHAL) {
 bool HalSendUpstream(HALHANDLE hHAL, const uint8_t* data, size_t size) {
   HalInstance* inst = (HalInstance*)hHAL;
   if ((size <= MAX_BUFFER_SIZE) && (size > 0)) {
-    ThreadMesssage msg;
+    ThreadMessage msg;
     msg.command = MSG_RX_DATA;
     msg.payload = data;
     msg.length = size;
@@ -513,7 +511,7 @@ static void HalStartTimer(HalInstance* inst, uint32_t duration) {
  * @param msg Message to send
  * @return true if message properly copied in ring buffer
  */
-static bool HalEnqueueThreadMessage(HalInstance* inst, ThreadMesssage* msg) {
+static bool HalEnqueueThreadMessage(HalInstance* inst, ThreadMessage* msg) {
   // Put a message to the queue
   int nextWriteSlot;
   bool result = true;
@@ -534,7 +532,7 @@ static bool HalEnqueueThreadMessage(HalInstance* inst, ThreadMesssage* msg) {
 
   if (result) {
     // inst->ring[nextWriteSlot] = *msg;
-    memcpy(&(inst->ring[nextWriteSlot]), msg, sizeof(ThreadMesssage));
+    memcpy(&(inst->ring[nextWriteSlot]), msg, sizeof(ThreadMessage));
     inst->ringWritePos = nextWriteSlot;
   }
 
@@ -553,7 +551,7 @@ static bool HalEnqueueThreadMessage(HalInstance* inst, ThreadMesssage* msg) {
  * @param msg Message received
  * @return true if there is a new message to pull, false otherwise.
  */
-static bool HalDequeueThreadMessage(HalInstance* inst, ThreadMesssage* msg) {
+static bool HalDequeueThreadMessage(HalInstance* inst, ThreadMessage* msg) {
   int nextCmdIndex;
   bool result = true;
   // New data available
@@ -573,7 +571,7 @@ static bool HalDequeueThreadMessage(HalInstance* inst, ThreadMesssage* msg) {
 
   // Get new element from ringbuffer
   if (result) {
-    memcpy(msg, &(inst->ring[nextCmdIndex]), sizeof(ThreadMesssage));
+    memcpy(msg, &(inst->ring[nextCmdIndex]), sizeof(ThreadMessage));
     inst->ringReadPos = nextCmdIndex;
   }
 
@@ -595,6 +593,10 @@ static bool HalDequeueThreadMessage(HalInstance* inst, ThreadMesssage* msg) {
  */
 static HalBuffer* HalAllocBuffer(HalInstance* inst) {
   HalBuffer* b;
+  if (inst == nullptr) {
+    STLOG_HAL_E("HalInstance is null.");
+    return nullptr;
+  }
 
   // Wait until we have a buffer resource
   sem_wait_nointr(&inst->bufferResourceSem);
@@ -719,7 +721,7 @@ static void* HalWorkerThread(void* arg) {
 
       case OS_SYNC_RELEASED: {
         // A message arrived
-        ThreadMesssage msg;
+        ThreadMessage msg;
 
         if (HalDequeueThreadMessage(inst, &msg)) {
           switch (msg.command) {

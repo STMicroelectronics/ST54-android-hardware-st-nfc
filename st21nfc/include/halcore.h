@@ -106,4 +106,12 @@ bool HalSendUpstream(HALHANDLE hHAL, const uint8_t* data, size_t size);
 void hal_wrapper_set_state(hal_wrapper_state_e new_wrapper_state);
 void hal_wrapper_setFwLogging(bool enable);
 void I2cResetPulse();
+
+void hal_wrapper_dumplog(int fd);
+
+#define REPLAY_INIT_OFF 0
+#define REPLAY_INIT_FILE 1
+#define REPLAY_INIT_AUTO 2
+#define REPLAY_INIT_FILE_STARTUP 3
+#define REPLAY_INIT_DONE 4
 #endif

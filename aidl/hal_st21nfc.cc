@@ -23,6 +23,7 @@
 #include <android-base/properties.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <stpropnci.h>
 #include <string.h>
 
 #include "StNfc_hal_api.h"
@@ -43,11 +44,11 @@ bool dbg_logging = false;
 extern void HalCoreCallback(void* context, uint32_t event, const void* d,
                             size_t length);
 extern bool I2cOpenLayer(void* dev, HAL_CALLBACK callb, HALHANDLE* pHandle);
-extern void i2cSetTimeBetweenCmds(int ms);
 
 typedef int (*STEseReset)(void);
 
-const char* halVersion = "ST21NFC AIDL HAL Version 150-20240927-24W39p0";
+const char* halVersion =
+    "ST21NFC AIDL HAL Version 25Q2-BP2A-20250405-Gen-25W14p0";
 
 uint8_t cmd_set_nfc_mode_enable[] = {0x2f, 0x02, 0x02, 0x02, 0x01};
 uint8_t hal_is_closed = 1;
@@ -68,12 +69,8 @@ extern int hal_wrapper_close(int call_cb, int nfc_mode);
 
 static bool client_is_nci_10 = false;
 
-extern void hal_wrapper_nfceeModeSetSent(uint8_t id, uint8_t mode);
-extern void hal_wrapper_unblockFwLogs();
 extern int hal_wrapper_send_config(int skip, bool isAidl);
 extern void hal_wrapper_factoryReset();
-extern void hal_wrapper_set_observer_mode(uint8_t enable);
-extern void hal_wrapper_get_observer_mode();
 
 /* Make sure to always post nfc_stack_callback_t in a separate thread.
 This prevents a possible deadlock in upper layer on some sequences.
@@ -236,6 +233,7 @@ static void async_callback_post(nfc_event_t event, nfc_status_t event_status) {
 
   if (pthread_equal(pthread_self(), async_callback_data.thr)) {
     dev.p_cback_unwrap(event, event_status);
+    return;
   }
 
   ret = pthread_mutex_lock(&async_callback_data.mutex);
@@ -332,102 +330,43 @@ int StNfc_hal_write(uint16_t data_len, const uint8_t* p_data) {
     return ret;
   }
 
-  uint8_t NCI_ANDROID_PASSIVE_OBSERVER_PREFIX[] = {0x2f, 0x0c, 0x02, 0x02};
-  uint8_t NCI_QUERY_ANDROID_PASSIVE_OBSERVER_PREFIX[] = {0x2f, 0x0c, 0x01, 0x4};
-  if (data_len == 4 &&
-      !memcmp(p_data, NCI_QUERY_ANDROID_PASSIVE_OBSERVER_PREFIX,
-              sizeof(NCI_QUERY_ANDROID_PASSIVE_OBSERVER_PREFIX))) {
-    uint8_t CORE_GET_CONFIG_OBSERVER[5] = {0x20, 0x03, 0x02, 0x01, 0xa3};
-    hal_wrapper_get_observer_mode();
-    if (!HalSendDownstream(dev.hHAL, CORE_GET_CONFIG_OBSERVER, 5)) {
-      STLOG_HAL_E("HAL st21nfc %s  SendDownstream failed", __func__);
-      (void)pthread_mutex_unlock(&hal_mtx);
-      return 0;
-    }
-  } else if (data_len == 5 &&
-             !memcmp(p_data, NCI_ANDROID_PASSIVE_OBSERVER_PREFIX,
-                     sizeof(NCI_ANDROID_PASSIVE_OBSERVER_PREFIX))) {
-    uint8_t CORE_SET_CONFIG_OBSERVER[7] = {0x20, 0x02, 0x04,     0x01,
-                                           0xa3, 0x01, p_data[4]};
-
-    hal_wrapper_set_observer_mode(p_data[4]);
-    if (!HalSendDownstream(dev.hHAL, CORE_SET_CONFIG_OBSERVER, 7)) {
-      STLOG_HAL_E("HAL st21nfc %s  SendDownstream failed", __func__);
-      (void)pthread_mutex_unlock(&hal_mtx);
-      return 0;
-    }
-  } else {
-    // Identify and block NCI 1.0 invalid clients such as
-    // replay_test_android.hardware.nfc_1.0_17261139999.vts.trace_default
-    {
-      uint8_t CORE_INIT_CMD_NCI1[] = {0x20, 0x01, 0x00};
-      if (data_len == sizeof(CORE_INIT_CMD_NCI1) &&
-          !memcmp(p_data, CORE_INIT_CMD_NCI1, data_len)) {
-        STLOG_HAL_W(
-            "NFC-NCI HAL: %s  Detected NCI 1.0 command, stop forwarding to "
-            "CLF",
-            __func__);
-        client_is_nci_10 = true;
-      }
-    }
-    if (client_is_nci_10 == true) {
-      STLOG_HAL_D("NFC-NCI HAL: %s  frame ignored (NCI1.0 detected)", __func__);
-      (void)pthread_mutex_unlock(&hal_mtx);
-      return 0;
-    }
-
-    // Identify an NFCEE_MODE_SET command for eSE (id 82 or 86)
-    {
-      uint8_t NFCEE_MODE_SET_PREFIX[] = {0x22, 0x01, 0x02};
-      if (data_len == 5 && !memcmp(p_data, NFCEE_MODE_SET_PREFIX,
-                                   sizeof(NFCEE_MODE_SET_PREFIX))) {
-        if (p_data[3] == 0x82 || p_data[3] == 0x86) {
-          hal_wrapper_nfceeModeSetSent(p_data[3], p_data[4]);
-        }
-      }
-    }
-
-    // entering RAW mode ?
-    {
-#define PROP_CTRL_RF_RAW_MODE_CMD 0x13
-      uint8_t ENTER_RAW_MODE_PREFIX[] = {0x2f, 0x02, 0x02,
-                                         PROP_CTRL_RF_RAW_MODE_CMD};
-      if (data_len == 5 && !memcmp(p_data, ENTER_RAW_MODE_PREFIX,
-                                   sizeof(ENTER_RAW_MODE_PREFIX))) {
-        if (p_data[4] == 0x01) {
-          // Limit the rate
-          unsigned long num;
-          if (GetNumValue(NAME_STNFC_CMD_DELAY_IN_RAWMODE_MS, &num,
-                          sizeof(num))) {
-            delay_in_raw_mode = (int)num;
-          }
-          i2cSetTimeBetweenCmds(delay_in_raw_mode);
-
-        } else {
-          // remove the limit
-          i2cSetTimeBetweenCmds(0);
-        }
-      }
-    }
-
-    // Identify if ST stack is the client by matching the RF_FIELD_INFO param
-    // set during the initialization.
-    {
-      uint8_t RF_FIELD_INFO_SET_PREFIX[] = {0x20, 0x02, 0x04, 0x01,
-                                            0x80, 0x01, 0x01};
-      if (data_len == sizeof(RF_FIELD_INFO_SET_PREFIX) &&
-          !memcmp(p_data, RF_FIELD_INFO_SET_PREFIX,
-                  sizeof(RF_FIELD_INFO_SET_PREFIX))) {
-        hal_wrapper_unblockFwLogs();
-      }
-    }
-
-    if (!HalSendDownstream(dev.hHAL, p_data, data_len)) {
-      STLOG_HAL_E("HAL st21nfc %s  SendDownstream failed", __func__);
-      (void)pthread_mutex_unlock(&hal_mtx);
-      return 0;
+  // Identify and block NCI 1.0 invalid clients such as
+  // replay_test_android.hardware.nfc_1.0_17261139999.vts.trace_default
+  {
+    uint8_t CORE_INIT_CMD_NCI1[] = {0x20, 0x01, 0x00};
+    if (data_len == sizeof(CORE_INIT_CMD_NCI1) &&
+        !memcmp(p_data, CORE_INIT_CMD_NCI1, data_len)) {
+      STLOG_HAL_W(
+          "NFC-NCI HAL: %s  Detected NCI 1.0 command, stop forwarding to "
+          "CLF",
+          __func__);
+      client_is_nci_10 = true;
     }
   }
+  if (client_is_nci_10 == true) {
+    STLOG_HAL_D("NFC-NCI HAL: %s  frame ignored (NCI1.0 detected)", __func__);
+    (void)pthread_mutex_unlock(&hal_mtx);
+    return 0;
+  }
+
+  // Log message Stack to Hal
+  DispHal("TX DATA S2H", p_data, data_len);
+
+  // Process NCI message here for prop NCI support
+  if (stpropnci_process(MSG_DIR_FROM_STACK, p_data, data_len)) {
+    // STLOG_HAL_V("%s - message was intercepted by stpropnci_process, consider
+    // handled", __func__);
+    (void)pthread_mutex_unlock(&hal_mtx);
+    return ret;
+  }
+
+  /* Default behavior: forward to the NFCC directly.*/
+  if (!HalSendDownstream(dev.hHAL, p_data, data_len)) {
+    STLOG_HAL_E("HAL st21nfc %s  SendDownstream failed", __func__);
+    (void)pthread_mutex_unlock(&hal_mtx);
+    return 0;
+  }
+
   (void)pthread_mutex_unlock(&hal_mtx);
 
   return ret;
@@ -452,6 +391,7 @@ int StNfc_hal_pre_discover() {
 }
 
 int StNfc_hal_close(int nfc_mode_value) {
+  void* stdll = nullptr;
   STLOG_HAL_D("HAL st21nfc: %s nfc_mode = %d", __func__, nfc_mode_value);
 
   /* check if HAL is closed */
@@ -477,9 +417,13 @@ int StNfc_hal_close(int nfc_mode_value) {
 
   std::string valueStr =
       android::base::GetProperty("persist.vendor.nfc.streset", "");
-  if (valueStr.length() > 0) {
-    valueStr = VENDOR_LIB_PATH + valueStr + VENDOR_LIB_EXT;
-    void* stdll = dlopen(valueStr.c_str(), RTLD_NOW);
+  // do a cold_reset when nfc is off
+  if (valueStr.length() > 0 && nfc_mode_value == 0) {
+    stdll = dlopen(valueStr.c_str(), RTLD_NOW);
+    if (!stdll) {
+      valueStr = VENDOR_LIB_PATH + valueStr + VENDOR_LIB_EXT;
+      stdll = dlopen(valueStr.c_str(), RTLD_NOW);
+    }
     if (stdll) {
       STLOG_HAL_D("STReset Cold reset");
       STEseReset fn = (STEseReset)dlsym(stdll, "cold_reset");
@@ -533,6 +477,7 @@ void StNfc_hal_getConfig(NfcConfig& config) {
 
   buffer.fill(0);
   long retlen = 0;
+  int i;
 
   memset(&config, 0x00, sizeof(NfcConfig));
 
@@ -542,8 +487,12 @@ void StNfc_hal_getConfig(NfcConfig& config) {
     }
   }
 
+  if (GetNumValue(NAME_POLL_BAIL_OUT_MODE, &num, sizeof(num))) {
+    config.nfaPollBailOutMode = num;
+  }
+
   if (GetNumValue(NAME_ISO_DEP_MAX_TRANSCEIVE, &num, sizeof(num))) {
-    config.maxIsoDepTransceiveLength = num;
+    config.maxIsoDepTransceiveLength = (uint32_t)num;
   }
   if (GetNumValue(NAME_DEFAULT_OFFHOST_ROUTE, &num, sizeof(num))) {
     config.defaultOffHostRoute = num;
@@ -588,6 +537,7 @@ void StNfc_hal_getConfig(NfcConfig& config) {
     config.nfaProprietaryCfg.discoveryPollKovio = (uint8_t)buffer[6];
     config.nfaProprietaryCfg.discoveryPollBPrime = (uint8_t)buffer[7];
     config.nfaProprietaryCfg.discoveryListenBPrime = (uint8_t)buffer[8];
+    config.nfaProprietaryCfg.protocolChineseId = (uint8_t)buffer[9];
   } else {
     memset(&config.nfaProprietaryCfg, 0xFF, sizeof(ProtocolDiscoveryConfig));
   }
@@ -604,7 +554,7 @@ void StNfc_hal_getConfig(NfcConfig& config) {
   if (GetByteArrayValue(NAME_OFFHOST_ROUTE_UICC, (char*)buffer.data(),
                         buffer.size(), &retlen)) {
     config.offHostRouteUicc.resize(retlen);
-    for (int i = 0; i < retlen; i++) {
+    for (i = 0; i < (int)retlen; i++) {
       config.offHostRouteUicc[i] = buffer[i];
     }
   }
@@ -612,13 +562,25 @@ void StNfc_hal_getConfig(NfcConfig& config) {
   if (GetByteArrayValue(NAME_OFFHOST_ROUTE_ESE, (char*)buffer.data(),
                         buffer.size(), &retlen)) {
     config.offHostRouteEse.resize(retlen);
-    for (int i = 0; i < retlen; i++) {
+    for (i = 0; i < (int)retlen; i++) {
       config.offHostRouteEse[i] = buffer[i];
     }
   }
 
   if (GetNumValue(NAME_DEFAULT_ISODEP_ROUTE, &num, sizeof(num))) {
     config.defaultIsoDepRoute = num;
+  }
+
+  if (GetByteArrayValue(NAME_OFF_HOST_SIM_PIPE_IDS, (char*)buffer.data(),
+                        buffer.size(), &retlen)) {
+    config.offHostSimPipeIds.resize(retlen);
+    for (int i = 0; i < retlen; i++) {
+      config.offHostSimPipeIds[i] = buffer[i];
+    }
+  }
+
+  if (GetNumValue(NAME_T4T_NFCEE_ENABLE, &num, sizeof(num))) {
+    config.t4tNfceeEnable = num;
   }
 }
 
@@ -633,3 +595,5 @@ void StNfc_hal_setLogging(bool enable) {
 }
 
 bool StNfc_hal_isLoggingEnabled() { return dbg_logging; }
+
+void StNfc_hal_dump(int fd) { hal_wrapper_dumplog(fd); }

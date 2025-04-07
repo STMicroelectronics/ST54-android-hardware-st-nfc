@@ -54,6 +54,8 @@ cc_library_static {
     owner: "st",
 
     cflags: [
+        "-DST21NFC",
+        "-DST21NFC_DTA",
         "-Wall",
         "-Werror",
         "-Wextra",
@@ -66,9 +68,9 @@ cc_library_static {
         "hal/halcore.cc",
         "hal/hal_replay.cc",
         "hal_wrapper.cc",
-        "hal/hal_fwlog.cc",
         "hal/hal_fd.cc",
         "hal/hal_auth.cc",
+        "hal/hal_event_logger.cc",
         "hal/loader_st21nfcd_RA7.c",
         "hal/loader_st21nfcd_RA9.c",
     ],
@@ -82,6 +84,10 @@ cc_library_static {
     export_include_dirs: [
         "include",
         "gki/ulinux",
+    ],
+
+    whole_static_libs: [
+        "libstpropnci-vendor",
     ],
 
     shared_libs: [

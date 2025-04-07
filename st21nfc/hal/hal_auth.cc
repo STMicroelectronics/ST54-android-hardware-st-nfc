@@ -17,9 +17,11 @@
  *
  ******************************************************************************/
 #define LOG_TAG "NfcHalAuth"
+#include "hal_auth.h"
+
 #include <dlfcn.h>
 #include <string.h>
-#include "hal_auth.h"
+
 #include "android_logmsg.h"
 #include "halcore.h"
 

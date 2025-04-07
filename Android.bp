@@ -28,36 +28,3 @@ license {
         "LICENSE",
     ],
 }
-
-cc_library_static {
-    name: "nfc_nci.st21nfc.static",
-    defaults: ["hidl_defaults"],
-    vendor: true,
-    owner: "st",
-
-    cflags: [
-        "-DST21NFC",
-        "-DST21NFC_DTA",
-        "-Wall",
-        "-Werror",
-        "-Wextra",
-    ],
-
-    srcs: ["1.2/hal_st21nfc.cc"],
-
-    whole_static_libs: [
-        "nfc_nci.st21nfc.st.static",
-    ],
-
-    shared_libs: [
-        "libbase",
-        "libcutils",
-        "libhardware",
-        "liblog",
-        "libutils",
-        "android.hardware.nfc@1.0",
-        "android.hardware.nfc@1.1",
-        "android.hardware.nfc@1.2",
-        "libhidlbase",
-    ],
-}
