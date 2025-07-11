@@ -63,6 +63,22 @@ typedef void (*outgoing_cb_t)(bool dir_to_nfcc, uint8_t* payload,
 bool stpropnci_init(int loglvl, outgoing_cb_t cb);
 
 /*
+ * stpropnci_change_log_level:
+ *
+ * This enables to update the log level of the library.
+ *
+ * loglvl: 0: no logs at all. 1: information and errors. 2: debug
+ */
+void stpropnci_change_log_level(int loglvl);
+
+/*
+ * stpropnci_st_set_hal_passthrough:
+ *
+ * For HAL AIDL version > 1, make sure the HAL's libstpropnci does not interfere
+ */
+void stpropnci_st_set_hal_passthrough();
+
+/*
  * stpropnci_deinit:
  *
  * Caller can call this when NFC is disabled, so resources may be freed.

@@ -354,7 +354,7 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
     case HAL_WRAPPER_STATE_OPEN:  // 1
       // CORE_RESET_NTF
       STLOG_HAL_V("%s - mHalWrapperState = HAL_WRAPPER_STATE_OPEN", __func__);
-      stpropnci_inform(false, p_data, data_len);
+      stpropnci_inform(MSG_DIR_FROM_NFCC, p_data, data_len);
 
       if ((p_data[0] == 0x60) && (p_data[1] == 0x00)) {
         if (mReplayInitStatus != REPLAY_INIT_AUTO) {
@@ -488,7 +488,7 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
     case HAL_WRAPPER_STATE_OPEN_CPLT:  // 2
       STLOG_HAL_V("%s - mHalWrapperState = HAL_WRAPPER_STATE_OPEN_CPLT",
                   __func__);
-      stpropnci_inform(false, p_data, data_len);
+      stpropnci_inform(MSG_DIR_FROM_NFCC, p_data, data_len);
       // CORE_INIT_RSP
       if ((p_data[0] == 0x40) && (p_data[1] == 0x01)) {
       } else if ((p_data[0] == 0x60) && (p_data[1] == 0x06)) {
@@ -517,7 +517,7 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
     case HAL_WRAPPER_STATE_FETCH_LOGS:  // 3
       STLOG_HAL_V("%s - mHalWrapperState = HAL_WRAPPER_STATE_FETCH_LOGS",
                   __func__);
-      stpropnci_inform(false, p_data, data_len);
+      stpropnci_inform(MSG_DIR_FROM_NFCC, p_data, data_len);
       if (p_data[0] == 0x4f) {
         // Wait 100ms before continue to have time to retrieve all the ntfs
         HalSendDownstreamTimer(mHalHandle, 100);
@@ -527,7 +527,7 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
       break;
     case HAL_WRAPPER_STATE_CONFIG:  // 4
       STLOG_HAL_V("%s - mHalWrapperState = HAL_WRAPPER_STATE_CONFIG", __func__);
-      stpropnci_inform(false, p_data, data_len);
+      stpropnci_inform(MSG_DIR_FROM_NFCC, p_data, data_len);
       if ((p_data[0] == 0x4f) && (p_data[1] == 0x02)) {
         // Response received
         if (p_data[3] != 0x00) {
@@ -982,7 +982,7 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
     case HAL_WRAPPER_STATE_NFC_ENABLE_ON:  // 4
       STLOG_HAL_V("%s - mHalWrapperState = HAL_WRAPPER_STATE_NFC_ENABLE_ON",
                   __func__);
-      stpropnci_inform(false, p_data, data_len);
+      stpropnci_inform(MSG_DIR_FROM_NFCC, p_data, data_len);
       // CORE_RESET_NTF
       if ((p_data[0] == 0x60) && (p_data[1] == 0x00) && (!isTimeout)) {
         if (forceRecover == true) {
@@ -1018,7 +1018,7 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
     case HAL_WRAPPER_STATE_CORE_CONFIG:
       STLOG_HAL_V("%s - mHalWrapperState = HAL_WRAPPER_STATE_CORE_CONFIG",
                   __func__);
-      stpropnci_inform(false, p_data, data_len);
+      stpropnci_inform(MSG_DIR_FROM_NFCC, p_data, data_len);
       // CORE_SET_CONFIG_RSP
       if ((p_data[0] == 0x40) && (p_data[1] == 0x02)) {
         if (!mFieldNtfConfigured) {
@@ -1080,7 +1080,7 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
             }
           }
         } else if (p_data[0] == 0x60 && p_data[1] == 0x00) {
-          stpropnci_inform(false, p_data, data_len);
+          stpropnci_inform(MSG_DIR_FROM_NFCC, p_data, data_len);
           p_data[3] = 0x0;  // if a poweron on ntf is received in
                             // HAL_WRAPPER_STATE_READY, consider it like a
                             // unrecoverable error.
@@ -1095,7 +1095,7 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
           // If so, send back fabricated CORE_RESET_NTF(abnormal) to force stack
           // restart
           STLOG_HAL_E("Received erroneous data, sending back CORE_RESET_NTF");
-          stpropnci_inform(false, p_data, data_len);
+          stpropnci_inform(MSG_DIR_FROM_NFCC, p_data, data_len);
           p_data = nciCoreResetNtfAbnormal;
           data_len = sizeof(nciCoreResetNtfAbnormal);
         }
@@ -1104,7 +1104,7 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
         forceRecover = false;
         callHalWrapperDataCallback(data_len, p_data);
       } else {
-        stpropnci_inform(false, p_data, data_len);
+        stpropnci_inform(MSG_DIR_FROM_NFCC, p_data, data_len);
         STLOG_HAL_V("%s - Core reset notification - Nfc mode ", __func__);
       }
       break;
@@ -1113,13 +1113,13 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
       STLOG_HAL_V(
           "%s - mHalWrapperState = HAL_WRAPPER_STATE_CLOSING_FETCH_LOGS",
           __func__);
-      stpropnci_inform(false, p_data, data_len);
+      stpropnci_inform(MSG_DIR_FROM_NFCC, p_data, data_len);
       break;
 
     case HAL_WRAPPER_STATE_CLOSING:
       STLOG_HAL_V("%s - mHalWrapperState = HAL_WRAPPER_STATE_CLOSING",
                   __func__);
-      stpropnci_inform(false, p_data, data_len);
+      stpropnci_inform(MSG_DIR_FROM_NFCC, p_data, data_len);
       if ((p_data[0] == 0x4f) && (p_data[1] == 0x02)) {
         hal_fd_close();
         // intercept this expected message, don t forward.
@@ -1134,30 +1134,30 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
           "%s - mHalWrapperState = "
           "HAL_WRAPPER_STATE_EXIT_HIBERNATE_ENTER_LOADER",
           __func__);
-      stpropnci_inform(false, p_data, data_len);
+      stpropnci_inform(MSG_DIR_FROM_NFCC, p_data, data_len);
       ExitHibernateEnterLoaderHandler(mHalHandle, data_len, p_data);
       break;
     case HAL_WRAPPER_STATE_EXIT_HIBERNATE_ONLY:  // 6
       STLOG_HAL_V(
           "%s - mHalWrapperState = HAL_WRAPPER_STATE_EXIT_HIBERNATE_ONLY",
           __func__);
-      stpropnci_inform(false, p_data, data_len);
+      stpropnci_inform(MSG_DIR_FROM_NFCC, p_data, data_len);
       ExitHibernateOnlyHandler(mHalHandle, data_len, p_data);
       break;
     case HAL_WRAPPER_STATE_LD_UPDATE:  // 7
       STLOG_HAL_V("%s - mHalWrapperState = HAL_WRAPPER_STATE_LD_UPDATE",
                   __func__);
-      stpropnci_inform(false, p_data, data_len);
+      stpropnci_inform(MSG_DIR_FROM_NFCC, p_data, data_len);
       LdUpdateHandler(mHalHandle, data_len, p_data);
       break;
     case HAL_WRAPPER_STATE_UPDATE:  // 7
       STLOG_HAL_V("%s - mHalWrapperState = HAL_WRAPPER_STATE_UPDATE", __func__);
-      stpropnci_inform(false, p_data, data_len);
+      stpropnci_inform(MSG_DIR_FROM_NFCC, p_data, data_len);
       FwUpdateHandler(mHalHandle, data_len, p_data);
       break;
     case HAL_WRAPPER_STATE_AUTH:  // 8
       STLOG_HAL_V("%s - mHalWrapperState = HAL_WRAPPER_STATE_AUTH", __func__);
-      stpropnci_inform(false, p_data, data_len);
+      stpropnci_inform(MSG_DIR_FROM_NFCC, p_data, data_len);
       AuthHandler(mHalHandle, data_len, p_data, &mHalWrapperState);
       if (mHalWrapperState == HAL_WRAPPER_STATE_OPEN_CPLT) {
         AuthCheckUnload();
@@ -1168,7 +1168,7 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
       STLOG_HAL_V(
           "%s - mHalWrapperState = HAL_WRAPPER_STATE_APPLY_CUSTOM_PARAM",
           __func__);
-      stpropnci_inform(false, p_data, data_len);
+      stpropnci_inform(MSG_DIR_FROM_NFCC, p_data, data_len);
       ApplyCustomParamHandler(mHalHandle, data_len, p_data);
       break;
   }

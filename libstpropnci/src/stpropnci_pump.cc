@@ -18,6 +18,7 @@
 #include <pthread.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <stpropnci-internal.h>
 
 // How many seconds after sending do we consider a message was lost ?
@@ -66,6 +67,35 @@ static msg_t* message_pop_first(msg_t* queue, int* ctr) {
     *ctr -= 1;
   }
   return r;
+}
+
+// remove first message that meets criterya
+static msg_t* message_pop_first_except(msg_t* queue, int* ctr,
+                                       bool skip_cmd_to_nfcc,
+                                       bool skip_data_to_nfcc) {
+  msg_t* prev = queue;
+  msg_t* m = nullptr;
+  while ((m = prev->next) != nullptr) {
+    uint8_t mt = (m->payload[0] & NCI_MT_MASK) >> NCI_MT_SHIFT;
+
+    if ((m->dir_to_nfcc == MSG_DIR_TO_NFCC) &&
+        ((skip_cmd_to_nfcc && (mt == NCI_MT_CMD)) ||
+         (skip_data_to_nfcc && (mt == NCI_MT_DATA)))) {
+      // we skip this one, go to next in queue
+      prev = m;
+      continue;
+    }
+
+    /* other cases, we pop this message */
+    break;
+  }
+
+  if (m != nullptr) {
+    prev->next = m->next;
+    m->next = nullptr;
+    *ctr -= 1;
+  }
+  return m;
 }
 
 // remove from queue in last position
@@ -306,11 +336,30 @@ static void* message_pump_thr(void* st) {
     msg_t* m;
     struct timespec t;
     bool timed = false;
+    bool skip_cmd = false;
+    bool skip_data = false;
+    bool updated = false;
+    int ctr_start = stpropnci_state.pumpstate.toSend_ctr;
+
+    // check which messages are pending
+    for (m = stpropnci_state.pumpstate.toAck.next; m != nullptr; m = m->next) {
+      uint8_t mt = (m->payload[0] & NCI_MT_MASK) >> NCI_MT_SHIFT;
+      if (mt == NCI_MT_CMD) {
+        // a cmd is pending, don t send a new one
+        skip_cmd = true;
+      }
+      if (mt == NCI_MT_DATA) {
+        // a data is pending, don t send a new one
+        skip_data = true;
+      }
+    }
 
     // send any outgoing message
-    while ((m = message_pop_first(&stpropnci_state.pumpstate.toSend,
-                                  &stpropnci_state.pumpstate.toSend_ctr)) !=
-           nullptr) {
+    while ((m = message_pop_first_except(&stpropnci_state.pumpstate.toSend,
+                                         &stpropnci_state.pumpstate.toSend_ctr,
+                                         skip_cmd, skip_data)) != nullptr) {
+      updated = true;
+
       // Unlock while sending responses but not commands.
       if (!m->dir_to_nfcc) {
         (void)pthread_mutex_unlock(&stpropnci_state.pumpstate.pump_mtx);
@@ -343,6 +392,7 @@ static void* message_pump_thr(void* st) {
       tssub(&t, DELAY_FOR_ACK_MS);
       // if the message was sent earlier than t, it is expired
       if (tscmp(stpropnci_state.pumpstate.toAck.next->ts, t) < 0) {
+        updated = true;
         m = message_pop_first(&stpropnci_state.pumpstate.toAck,
                               &stpropnci_state.pumpstate.toAck_ctr);
         if (!m->retried) {
@@ -384,6 +434,7 @@ static void* message_pump_thr(void* st) {
     if (stpropnci_state.pumpstate.toWatch.next != nullptr) {
       (void)clock_gettime(CLOCK_MONOTONIC, &t);
       if (tscmp(stpropnci_state.pumpstate.toWatch.next->ts_expire, t) < 0) {
+        updated = true;
         watchdog_t* w = wd_pop_first(&stpropnci_state.pumpstate.toWatch);
         LOG_E("Watchdog (type %d) expired, generating CORE_RESET_NTF",
               w->event);
@@ -404,7 +455,14 @@ static void* message_pump_thr(void* st) {
       break;
     }
     if (stpropnci_state.pumpstate.toSend.next != nullptr) {
-      // a new message was queued while we were sending, loop now.
+      if ((!updated) && (ctr_start == stpropnci_state.pumpstate.toSend_ctr)) {
+        // no change in lists, wait 1ms before loop
+        // otherwise if there was an update, a new message was queued while we
+        // were processing, we skip the wait and loop directly.
+        (void)pthread_mutex_unlock(&stpropnci_state.pumpstate.pump_mtx);
+        usleep(1000);
+        (void)pthread_mutex_lock(&stpropnci_state.pumpstate.pump_mtx);
+      }
       continue;
     }
 

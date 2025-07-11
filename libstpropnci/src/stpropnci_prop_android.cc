@@ -74,6 +74,15 @@ static bool stpropnci_cb_observe_mode_suspend(bool dir_from_upper,
                                               const uint16_t payloadlen,
                                               uint8_t mt, uint8_t gid,
                                               uint8_t oid);
+static void stpropnci_build_get_prop_config_cmd(uint8_t *buf, uint16_t *buflen);
+#ifdef NCI_ANDROID_SET_UID_AND_SAK
+static bool stpropnci_process_uid_and_sak_steps(bool dir_from_upper,
+                                                const uint8_t *payload,
+                                                const uint16_t payloadlen,
+                                                uint8_t mt, uint8_t gid,
+                                                uint8_t oid);
+static void stpropnci_prop_uid_and_sak_send_rsp(uint8_t status);
+#endif  // NCI_ANDROID_SET_UID_AND_SAK
 
 static uint16_t iso14443_crc(const uint8_t *data, size_t szLen, int type);
 #define CRC_PRESET_A 0x6363
@@ -219,7 +228,26 @@ bool stpropnci_process_prop_android(bool inform_only, bool dir_from_upper,
                                     stpropnci_cb_set_custom_polling_rsp);
           }
           break;
+#ifdef NCI_ANDROID_SET_UID_AND_SAK
+        // This command is not yet in AOSP 25Q2
+        case NCI_ANDROID_SET_UID_AND_SAK:
+          // Store parameters UID and SAK
+          stpropnci_state.uid_length = payload[6];
+          memcpy(stpropnci_state.uid, payload + 7, payload[6]);
+          stpropnci_state.sak = payload[9 + payload[6]];
+          LOG_D("SAK=0x%x, UID length=%d", stpropnci_state.sak,
+                stpropnci_state.uid_length);
 
+          stpropnci_build_get_prop_config_cmd(stpropnci_state.tmpbuff,
+                                              stpropnci_state.tmpbufflen);
+          stpropnci_state.uid_and_sak_state =
+              stpropnci_state::UID_N_SAK_GET_CONFIG;
+          // send it to NFCC
+          handled = stpropnci_pump_post(
+              MSG_DIR_TO_NFCC, stpropnci_state.tmpbuff,
+              *stpropnci_state.tmpbufflen, stpropnci_process_uid_and_sak_steps);
+          break;
+#endif  // NCI_ANDROID_SET_UID_AND_SAK
         case NCI_ANDROID_GET_PASSIVE_OBSERVER_EXIT_FRAME:
           // TODO ST_NCI_MSG_PROP_RF_GET_OBSERVE_MODE_EXIT_FRAME
           // don't support yet since not used by AOSP, wait for integration.
@@ -1304,3 +1332,138 @@ static uint16_t iso14443_crc(const uint8_t *data, size_t szLen, int type) {
 
   return tempCrc;
 }
+/*******************************************************************************
+**
+** Function         stpropnci_build_get_prop_config_cmd
+**
+** Description      Prepare the RF_SET_LISTEN_OBSERVE_MODE_CMD for observe mode
+*(new method)
+**
+** Returns          none
+**
+*******************************************************************************/
+static void stpropnci_build_get_prop_config_cmd(uint8_t *buf,
+                                                uint16_t *buflen) {
+  // Build PROP_GET_CONFIG command to retrieve NDEF-NFCEE config
+  uint8_t *pp = buf, *paylen;
+  NCI_MSG_BLD_HDR0(pp, NCI_MT_CMD, NCI_GID_PROP);
+  NCI_MSG_BLD_HDR1(pp, ST_NCI_MSG_PROP);
+  paylen = pp++;
+
+  UINT8_TO_STREAM(pp, 0x03);  // PROP_GET_CONFIG
+  UINT8_TO_STREAM(pp, 0x00);
+  UINT8_TO_STREAM(pp, 0x04);  // NDEF-NFCEE
+  UINT8_TO_STREAM(pp, 0x01);
+  UINT8_TO_STREAM(pp, 0x00);
+
+  // Update the pending fields
+  *paylen = pp - (paylen + 1);
+  *buflen = pp - buf;
+}
+
+#ifdef NCI_ANDROID_SET_UID_AND_SAK
+/*******************************************************************************
+**
+** Function         stpropnci_process_uid_and_sak_steps
+**
+** Description      Process the response from
+*ST_NCI_MSG_PROP_RF_SET_CUST_PASSIVE_POLL_FRAME
+**
+** Returns          true if the response was handled and shall not be fwded.
+**
+*******************************************************************************/
+static bool stpropnci_process_uid_and_sak_steps(bool dir_from_upper,
+                                                const uint8_t *payload,
+                                                const uint16_t payloadlen,
+                                                uint8_t mt, uint8_t gid,
+                                                uint8_t oid) {
+  uint8_t *buf = stpropnci_state.tmpbuff;
+  uint16_t *buflen = stpropnci_state.tmpbufflen;
+  uint8_t *pp = buf, *paylen;
+
+  stpropnci_tmpbuff_reset();
+  // Check status code of last response
+  if (payload[3] != NCI_STATUS_OK) {
+    stpropnci_prop_uid_and_sak_send_rsp(payload[3]);
+    return true;
+  }
+  if (stpropnci_state.uid_and_sak_state ==
+      stpropnci_state::UID_N_SAK_GET_CONFIG) {
+    LOG_D("Received PROP_GET_CONFIG_RSP");
+    // Got RSP to PROP_GET_CONFIG, modify values and call PROP_SET_CONFIG
+    stpropnci_state.uid_and_sak_state = stpropnci_state::UID_N_SAK_SET_CONFIG;
+
+    uint8_t ndef_ncfee_config[payload[6]];
+    memcpy(ndef_ncfee_config, payload + 7, payload[6]);
+    ndef_ncfee_config[20] = stpropnci_state.uid_length;
+    ndef_ncfee_config[26] = stpropnci_state.sak;
+    for (int i = 0; i < stpropnci_state.uid_length; i++) {
+      ndef_ncfee_config[72 + i] = stpropnci_state.uid[i];
+    }
+
+    // build the response to stack
+    NCI_MSG_BLD_HDR0(pp, NCI_MT_CMD, NCI_GID_PROP);
+    NCI_MSG_BLD_HDR1(pp, ST_NCI_MSG_PROP);
+    paylen = pp++;
+
+    UINT8_TO_STREAM(pp, 0x04);  // PROP_SET_CONFIG
+    UINT8_TO_STREAM(pp, 0x00);
+    UINT8_TO_STREAM(pp, 0x04);  // NDEF-NFCEE
+    UINT8_TO_STREAM(pp, 0x01);
+    UINT8_TO_STREAM(pp, 0x00);        // Param Id
+    UINT8_TO_STREAM(pp, payload[6]);  // Length
+    ARRAY_TO_STREAM(pp, ndef_ncfee_config, payload[6]);
+
+    // Update the pending fields
+    *paylen = pp - (paylen + 1);
+    *buflen = pp - buf;
+
+    return stpropnci_pump_post(MSG_DIR_TO_NFCC, stpropnci_state.tmpbuff,
+                               *stpropnci_state.tmpbufflen,
+                               stpropnci_process_uid_and_sak_steps);
+  } else if (stpropnci_state.uid_and_sak_state ==
+             stpropnci_state::UID_N_SAK_SET_CONFIG) {
+    LOG_D("Received PROP_SET_CONFIG_RSP");
+    // Got RSP to PROP_SET_CONFIG, send ANDROID RSP
+    stpropnci_prop_uid_and_sak_send_rsp(NCI_STATUS_OK);
+  } else {
+    // Unknown, send failed ANDROID RSP
+    stpropnci_prop_uid_and_sak_send_rsp(NCI_STATUS_FAILED);
+  }
+  return true;
+}
+/*******************************************************************************
+**
+** Function         stpropnci_prop_uid_and_sak_send_rsp
+**
+** Description      Generate a GET_RESO_FREQ response with error code
+**
+** Returns          n/a
+**
+*******************************************************************************/
+static void stpropnci_prop_uid_and_sak_send_rsp(uint8_t status) {
+  uint8_t *buf = stpropnci_state.tmpbuff;
+  uint16_t *buflen = stpropnci_state.tmpbufflen;
+  uint8_t *pp = buf, *paylen;
+
+  stpropnci_state.uid_and_sak_state = stpropnci_state::UID_N_SAK_GET_CONFIG;
+
+  stpropnci_tmpbuff_reset();
+
+  // send rsp to stack
+  NCI_MSG_BLD_HDR0(pp, NCI_MT_RSP, NCI_GID_PROP);
+  NCI_MSG_BLD_HDR1(pp, NCI_MSG_PROP_ANDROID);
+  paylen = pp++;
+  UINT8_TO_STREAM(pp, NCI_ANDROID_SET_UID_AND_SAK);
+  UINT8_TO_STREAM(pp, status);
+
+  // Update the pending fields
+  *paylen = pp - (paylen + 1);
+  *buflen = pp - buf;
+
+  if (!stpropnci_pump_post(MSG_DIR_TO_STACK, stpropnci_state.tmpbuff,
+                           *stpropnci_state.tmpbufflen, nullptr)) {
+    LOG_E("Failed to send error response to stack");
+  }
+}
+#endif  // NCI_ANDROID_SET_UID_AND_SAK

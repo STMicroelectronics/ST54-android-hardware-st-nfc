@@ -31,11 +31,11 @@
 extern int stpropnci_loglvl;
 #ifndef STPROPNCI_VENDOR
 #include <log/log.h>
-#define LOG_D(fmt, ...)                                                      \
-  {                                                                          \
-    if (stpropnci_loglvl > 1)                                                \
-      LOG_PRI(ANDROID_LOG_DEBUG, LOG_TAG, "%s:%d: " fmt, __func__, __LINE__, \
-              ##__VA_ARGS__);                                                \
+#define LOG_D(fmt, ...)                                                        \
+  {                                                                            \
+    if (stpropnci_loglvl > 1)                                                  \
+      LOG_PRI(ANDROID_LOG_VERBOSE, LOG_TAG, "%s:%d: " fmt, __func__, __LINE__, \
+              ##__VA_ARGS__);                                                  \
   }
 #define LOG_I(fmt, ...)                                                      \
   {                                                                          \
@@ -116,6 +116,16 @@ typedef struct watchdog {
   struct watchdog* next;
 } watchdog_t;
 
+#define NFC_PROTO_T2T_MASK 0x01
+#define NFC_PROTO_T3T_MASK 0x02
+#define NFC_PROTO_T4T_MASK 0x04
+typedef struct {
+  uint8_t nfcee_id; /* NFCEE ID                         */
+  uint8_t la;       /* Listen A protocols    */
+  uint8_t lb;       /*Listen B protocols                     */
+  uint8_t lf;       /*Listen B protocols                     */
+} ee_info_t;
+
 /* State machine */
 extern struct stpropnci_state {
   /*****************************
@@ -126,6 +136,9 @@ extern struct stpropnci_state {
     ST_INIT = 0,
 
   } cmd_state;
+
+  // Passthrough mode; if true, no processing done in this lib.
+  bool passthrough_mode;
 
   // Data from the last CORE_RESET_NTF (len=0 if not received)
   uint8_t manu_specific_info_len;
@@ -169,6 +182,17 @@ extern struct stpropnci_state {
 
   // To ensure enough time after sending RF data, before deactivation
   struct timespec ts_last_rf_tx;
+
+  // Store RF_NFCEE_DISCOVERY_REQ_NTF data
+  ee_info_t ee_info[5];
+  uint8_t nb_ee_info;
+
+  // Handle command NCI_ANDROID_SET_UID_AND_SAK
+  enum { UID_N_SAK_GET_CONFIG = 0, UID_N_SAK_SET_CONFIG } uid_and_sak_state;
+  uint8_t sak;
+  uint8_t uid[10];
+  uint8_t uid_length;
+  bool is_card_a_on;
 
   /*****************************
        Internal lib configs

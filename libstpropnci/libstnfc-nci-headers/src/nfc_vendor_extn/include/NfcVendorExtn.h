@@ -95,6 +95,9 @@ typedef enum {
   HANDLE_NFC_HAL_POWER_CYCLE,
   HANDLE_NFC_GET_MAX_NFCEE,
   HANDLE_NFC_HAL_CLOSE,
+#ifdef ST21NFC
+  HANDLE_NFC_DEVICE_SHUTDOWN,
+#endif  // ST21NFC
 } NfcExtEvent_t;
 
 typedef enum {

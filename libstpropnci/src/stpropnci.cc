@@ -49,7 +49,7 @@ bool stpropnci_init(int loglvl, outgoing_cb_t cb) {
 #define VARIANT "vendor"
 #endif
   LOG_I(
-      "(re)Initializing (version:25Q2-BP2A-20250405-Gen-25W14p0, "
+      "(re)Initializing (version:25Q2-BP2A-20250518-Mainline-25W21p0, "
       "variant:" VARIANT "), log:%d",
       loglvl);
 
@@ -75,6 +75,24 @@ bool stpropnci_init(int loglvl, outgoing_cb_t cb) {
 
   (void)pthread_mutex_unlock(&reentry_lock);
   return true;
+}
+
+/*******************************************************************************
+**
+** Function         stpropnci_change_log_level
+**
+** Description      Update current log level.
+**
+** Params:
+**   - loglvl :  0: nothing;  1: important data only; 2: everything
+**
+** Returns          -
+**
+*******************************************************************************/
+void stpropnci_change_log_level(int loglvl) {
+  (void)pthread_mutex_lock(&reentry_lock);
+  stpropnci_loglvl = loglvl;
+  (void)pthread_mutex_unlock(&reentry_lock);
 }
 
 /*******************************************************************************
@@ -145,9 +163,15 @@ bool stpropnci_process(bool dir_from_upper, const uint8_t* payload,
     (void)pthread_mutex_unlock(&reentry_lock);
     return ret;
   }
-  LOG_I("Processing (hdr:%02hhx%02hhx%02hhx)", payload[0], payload[1],
-        payload[2]);
-
+  if (!stpropnci_state.passthrough_mode) {
+    if (payloadlen > 3) {
+      LOG_D("Processing (hdr:%02hhx%02hhx%02hhx%02hhx)", payload[0], payload[1],
+            payload[2], payload[3]);
+    } else {
+      LOG_D("Processing (hdr:%02hhx%02hhx%02hhx)", payload[0], payload[1],
+            payload[2]);
+    }
+  }
   if (dir_from_upper == MSG_DIR_FROM_NFCC) {
     // pass to pump first in case this acknowledges a sent message
     stpropnci_pump_got(payload, payloadlen, &ret);
@@ -159,6 +183,24 @@ bool stpropnci_process(bool dir_from_upper, const uint8_t* payload,
     const uint8_t* p = payload;
     NCI_MSG_PRS_HDR0(p, mt, pbf, gid);
     NCI_MSG_PRS_HDR1(p, oid);
+
+    // passthrough mode ?
+    if (stpropnci_state.passthrough_mode) {
+      // Only accept a command to set passthrough, anything else is not
+      // processed.
+      if ((mt != NCI_MT_CMD) || (gid != NCI_GID_PROP) ||
+          (oid != ST_PROP_NCI_OID) ||
+          (payload[3] != ST_PROP_NCI_SET_LIB_PASSTHOUGH)) {
+        // passthrough mode: do nothing.
+        if (dir_from_upper == MSG_DIR_FROM_NFCC) {
+          // post rsp & ntf to have proper logging in stpropnci_cb
+          ret =
+              stpropnci_pump_post(dir_from_upper, payload, payloadlen, nullptr);
+        }
+        (void)pthread_mutex_unlock(&reentry_lock);
+        return ret;
+      }
+    }
 
     // if a submodule callback handles it, stop here
     ret = stpropnci_modcb_process(dir_from_upper, payload, payloadlen, mt, gid,
@@ -217,8 +259,19 @@ void stpropnci_inform(bool dir_from_upper, const uint8_t* payload,
     (void)pthread_mutex_unlock(&reentry_lock);
     return;
   }
-  LOG_I("Processing (hdr:%02hhx%02hhx%02hhx)", payload[0], payload[1],
-        payload[2]);
+  if (stpropnci_state.passthrough_mode) {
+    // just ignore
+    (void)pthread_mutex_unlock(&reentry_lock);
+    return;
+  }
+
+  if (payloadlen > 3) {
+    LOG_D("Processing (hdr:%02hhx%02hhx%02hhx%02hhx)", payload[0], payload[1],
+          payload[2], payload[3]);
+  } else {
+    LOG_D("Processing (hdr:%02hhx%02hhx%02hhx)", payload[0], payload[1],
+          payload[2]);
+  }
 
   p = payload;
   NCI_MSG_PRS_HDR0(p, mt, pbf, gid);

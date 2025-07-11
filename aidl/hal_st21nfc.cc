@@ -48,7 +48,7 @@ extern bool I2cOpenLayer(void* dev, HAL_CALLBACK callb, HALHANDLE* pHandle);
 typedef int (*STEseReset)(void);
 
 const char* halVersion =
-    "ST21NFC AIDL HAL Version 25Q2-BP2A-20250405-Gen-25W14p0";
+    "ST21NFC AIDL HAL Version 25Q2-BP2A-20250518-Mainline-25W21p0";
 
 uint8_t cmd_set_nfc_mode_enable[] = {0x2f, 0x02, 0x02, 0x02, 0x01};
 uint8_t hal_is_closed = 1;
@@ -582,6 +582,10 @@ void StNfc_hal_getConfig(NfcConfig& config) {
   if (GetNumValue(NAME_T4T_NFCEE_ENABLE, &num, sizeof(num))) {
     config.t4tNfceeEnable = num;
   }
+  // Fallback : use legacy name
+  else if (GetNumValue(NAME_NDEF_NFCEE_ENABLE, &num, sizeof(num))) {
+    config.t4tNfceeEnable = num;
+  }
 }
 
 void StNfc_hal_setLogging(bool enable) {
@@ -592,6 +596,7 @@ void StNfc_hal_setLogging(bool enable) {
   } else {
     hal_trace_level = hal_conf_trace_level;
   }
+  stpropnci_change_log_level(hal_trace_level);
 }
 
 bool StNfc_hal_isLoggingEnabled() { return dbg_logging; }

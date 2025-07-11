@@ -598,6 +598,10 @@ typedef struct {
   /* ChangeDiscoveryTech management */
   tNFA_TECHNOLOGY_MASK change_poll_mask;   /* changing poll tech mask */
   tNFA_TECHNOLOGY_MASK change_listen_mask; /* changing listen tech mask */
+#ifdef ST21NFC
+  /* Set a custom confim from upper layer */
+  bool custom_config;
+#endif
 } tNFA_DM_CB;
 
 /* Internal function prototypes */

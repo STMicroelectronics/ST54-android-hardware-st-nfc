@@ -49,6 +49,7 @@
 #define ST_NCI_PROP_GET_NFC_MODE 0x01
 #define ST_NCI_PROP_SET_NFC_MODE 0x02
 #define ST_NCI_PROP_GET_CONFIG 0x03
+#define ST_NCI_PROP_GET_CONFIG__ESE_ATTR_ID 0x0B
 #define ST_NCI_PROP_SET_CONFIG 0x04
 #define ST_NCI_PROP_EMVCO_PCD_MODE 0x05
 #define ST_NCI_PROP_NFC_FW_UPDATE 0x06
@@ -65,6 +66,10 @@
 #define ST_NCI_PROP_LOG 0x20
 #define ST_NCI_PROP_GET_PERSO_DATA 0x22
 #define ST_NCI_PROP_PULSE_PATTERN_DETECTED 0x23
+
+/* Proprietary registers ID */
+#define ST_NCI_PROP__CONFIG_SUBSET__NFCC_CONFIG 0x01
+#define ST_NCI_PROP__CONFIG_SUBSET__HW_CONFIG 0x02
 
 /* types of FW logs */
 #define FWLOG_T_firstRx 0x04
@@ -106,6 +111,7 @@
 #define ST_NCI_PROP_TEST_CARD_CFG 0xB1
 #define ST_NCI_PROP_TEST_DATA 0xB2
 #define ST_NCI_PROP_TEST_FIELD 0xB3
+#define ST_NCI_PROP_TEST_RFI_GET 0xB5
 #define ST_NCI_PROP_TEST_ADJUST_AND_WRITE_PHASE 0xB7
 #define ST_NCI_PROP_READ_RF_REGISTER 0xB8
 #define ST_NCI_PROP_WRITE_RF_MASK_REGISTER 0xB9
@@ -165,10 +171,15 @@ bool stpropnci_process_prop_st(bool inform_only, bool dir_from_upper,
 /*****************************************************************************/
 #define ST_PROP_NCI_OID 0x01
 
+#define ST_PROP_NCI_SET_LIB_PASSTHOUGH 0x00
+/* command: 1 byte : 00 (disabled) / 01 (enabled) */
+/* response: no payload */
+/* NTF: no ntf */
+
 #define ST_PROP_NCI_GET_STPROPNCI_VERSION_SUBOID 0x01
 /* command: no payload */
 /* response: 2 bytes (=STPROPNCI_LIB_VERSION, MSB) */
-/* no NTF */
+/* NTF: 2 bytes (=STPROPNCI_LIB_VERSION, MSB), sent by HAL only. */
 
 #define ST_PROP_NCI_GET_MANUF_DATA_SUBOID 0x02
 /* command: no payload */
@@ -194,5 +205,30 @@ bool stpropnci_process_prop_st(bool inform_only, bool dir_from_upper,
 /* no CMD */
 /* no RSP */
 /* NTF : same payload as RF_NFCEE_ACTION_NTF with trigger == 0x11 */
+
+#define ST_PROP_NCI_RAW_JNI_SEQ 0x07
+/* command: byte + byte array (parameters of RawJniSeq)*/
+/* rsp: always OK */
+/* NTF: bytes returned by RawJniSeq */
+
+#define ST_PROP_NCI_SKIP_MIFARE 0x08
+/* command: status ON/OFF*/
+/* rsp: always OK */
+/* no NTF */
+
+#define ST_PROP_EMULATE_NFC_A_CARD_1 0x09
+/* command: command bytes */
+/* rsp: OK/KO */
+/* no NTF */
+
+#define ST_PROP_EMULATE_NFC_A_CARD_2 0x10
+/* command: on/off */
+/* rsp: OK */
+/* no NTF */
+
+#define ST_PROP_STORE_MIFARE_TOKEN 0x11
+/* command: on/off */
+/* rsp: OK */
+/* NTF: bytes stored */
 
 #endif  // STPROPNCI_PROP_ST_H

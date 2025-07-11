@@ -39,6 +39,7 @@ bool stpropnci_prop_st_hci_reassembly_cb(bool dir_from_upper,
                                          uint8_t gid, uint8_t oid);
 static bool stpropnci_prop_st_cb_apdu_gate_transceive(
     const uint8_t* payload, const uint16_t payloadlen);
+void parse_fw_ntf(const uint8_t* payload, const uint16_t payloadlen);
 
 static const uint8_t ESE_ATR_REG_IDX = 0x01;
 static const uint8_t EVT_SE_SOFT_RESET = 0x11;
@@ -74,13 +75,34 @@ bool stpropnci_process_prop_st(bool inform_only, bool dir_from_upper,
 
   switch (mt) {
     case NCI_MT_CMD:
+      /*********************************************************************/
+      /***                CMD                     ***/
+      /*********************************************************************/
       if (dir_from_upper != MSG_DIR_FROM_STACK) {
         LOG_E(" Unexpected CMD coming from NFCC");
         return false;
       }
       switch (oid) {
         case ST_PROP_NCI_OID:  // command from extensions
+          /******************* NFC OEM ext CMD ***********************/
           switch (payload[3]) {
+            case ST_PROP_NCI_SET_LIB_PASSTHOUGH: {
+              LOG_I("Set passthrough mode: %02hhx", payload[4]);
+              stpropnci_state.passthrough_mode = (payload[4] == 0x01);
+              // and respond
+              NCI_MSG_BLD_HDR0(pp, NCI_MT_RSP, NCI_GID_PROP);
+              NCI_MSG_BLD_HDR1(pp, ST_PROP_NCI_OID);
+              paylen = pp++;
+              UINT8_TO_STREAM(pp, ST_PROP_NCI_SET_LIB_PASSTHOUGH);
+              UINT8_TO_STREAM(pp, NCI_STATUS_OK);
+              *paylen = pp - (paylen + 1);
+              *buflen = pp - buf;
+              // send it
+              handled =
+                  stpropnci_pump_post(MSG_DIR_TO_STACK, stpropnci_state.tmpbuff,
+                                      *stpropnci_state.tmpbufflen, nullptr);
+            } break;
+
             case ST_PROP_NCI_GET_STPROPNCI_VERSION_SUBOID: {
               uint16_t version = STPROPNCI_LIB_VERSION;
 
@@ -226,6 +248,23 @@ bool stpropnci_process_prop_st(bool inform_only, bool dir_from_upper,
               }
             } break;
 
+            case ST_PROP_EMULATE_NFC_A_CARD_2: {
+              stpropnci_state.is_card_a_on =
+                  ((payload[4] & 0xFF) == 0x01 ? true : false);
+
+              NCI_MSG_BLD_HDR0(pp, NCI_MT_RSP, NCI_GID_PROP);
+              NCI_MSG_BLD_HDR1(pp, ST_PROP_NCI_OID);
+              paylen = pp++;
+              UINT8_TO_STREAM(pp, ST_PROP_EMULATE_NFC_A_CARD_2);
+              UINT8_TO_STREAM(pp, NCI_STATUS_OK);
+              *paylen = pp - (paylen + 1);
+              *buflen = pp - buf;
+              // send it back
+              handled =
+                  stpropnci_pump_post(MSG_DIR_TO_STACK, stpropnci_state.tmpbuff,
+                                      *stpropnci_state.tmpbufflen, nullptr);
+            } break;
+
             default:
               LOG_I("ST OID(1) suboid %02hhx not supported", payload[3]);
               stpropnci_build_prop_status_rsp(
@@ -240,13 +279,21 @@ bool stpropnci_process_prop_st(bool inform_only, bool dir_from_upper,
           break;
 
         case ST_NCI_MSG_PROP:
+          /******************* NFC ST NCI PROP ***********************/
           switch (payload[3]) {
             case ST_NCI_PROP_GET_CONFIG:
-              if (payload[4] == 0x0b) {
+              if (payload[4] == ST_NCI_PROP_GET_CONFIG__ESE_ATTR_ID) {
                 handled =
                     stpropnci_pump_post(MSG_DIR_TO_NFCC, payload, payloadlen,
                                         stpropnci_cb_get_apdu_info);
+              } else if (payload[4] & 0x08) {
+                // Retrieve pipe list for another SE, expected, just
+                // passthrough.
+                handled =
+                    stpropnci_pump_post(MSG_DIR_TO_NFCC, payload, payloadlen,
+                                        stpropnci_cb_passthrough_rsp);
               } else {
+                // Another config, not used so far
                 LOG_I(
                     "Received ST FW prop command from stack, unexpected but "
                     "let it passthrough");
@@ -268,6 +315,7 @@ bool stpropnci_process_prop_st(bool inform_only, bool dir_from_upper,
           break;
 
         default:
+          /******************* default ***********************/
           LOG_I(
               "Received ST prop command from stack, unexpected but let it "
               "passthrough");
@@ -279,10 +327,16 @@ bool stpropnci_process_prop_st(bool inform_only, bool dir_from_upper,
       break;
 
     case NCI_MT_RSP:
+      /*********************************************************************/
+      /***                RSP                     ***/
+      /*********************************************************************/
       LOG_E(" Unexpected RSP to process, should be always via cb. let through");
       return false;
 
     case NCI_MT_NTF:
+      /*********************************************************************/
+      /***                NTF                     ***/
+      /*********************************************************************/
       if (dir_from_upper != MSG_DIR_FROM_NFCC) {
         LOG_E(" Unexpected NTF coming from stack, let it go");
         return false;
@@ -292,6 +346,7 @@ bool stpropnci_process_prop_st(bool inform_only, bool dir_from_upper,
         case ST_NCI_MSG_PROP_PWR_MON_RW_ON_NTF:
           stpropnci_state.pwr_mon_isActiveRW = true;
           stpropnci_state.pwr_mon_errorCount = 0;
+          handled = true;
           break;
 
         case ST_NCI_MSG_PROP_PWR_MON_RW_OFF_NTF:
@@ -307,6 +362,7 @@ bool stpropnci_process_prop_st(bool inform_only, bool dir_from_upper,
               }
             }
           }
+          handled = true;
           break;
 
         case ST_NCI_MSG_PROP_RF_OBSERVE_MODE_SUSPENDED:
@@ -351,8 +407,28 @@ bool stpropnci_process_prop_st(bool inform_only, bool dir_from_upper,
                                   *stpropnci_state.tmpbufflen, nullptr);
           break;
 
+        case ST_NCI_MSG_PROP:
+          /******************* NFC ST NCI PROP ***********************/
+          switch (payload[4]) {
+            case ST_NCI_PROP_LOG:
+              // Parse FW NTF
+              parse_fw_ntf(payload, payloadlen);
+
+              // We have no further processing at the moment.
+              // we may add more workarounds here later.
+              handled = true;
+              break;
+
+            default:
+              LOG_I("ST Prop NTF not processed, but block it");
+              handled = true;
+              break;
+          }
+          break;
+
         default:
-          LOG_I("ST Prop NTF processing not implemented yet, but block it");
+          /******************* default ***********************/
+          LOG_I("ST Prop NTF not processed, but block it");
           handled = true;
           break;
       }
@@ -364,11 +440,45 @@ bool stpropnci_process_prop_st(bool inform_only, bool dir_from_upper,
 
 /*******************************************************************************
 **
-** Function         stpropnci_cb_passthrough_rsp
+** Function         stpropnci_st_set_hal_passthrough
 **
-** Description      If we let a command passthrough, let the rsp as well.
+** Description      Instruct lower lib to stop processing.
 **
 ** Returns          true
+**
+*******************************************************************************/
+void stpropnci_st_set_hal_passthrough() {
+#ifdef STPROPNCI_VENDOR
+  LOG_E("This method shall not be called in VENDOR version");
+#else   // STPROPNCI_VENDOR
+  uint8_t* buf = stpropnci_state.tmpbuff;
+  uint16_t* buflen = stpropnci_state.tmpbufflen;
+  uint8_t *pp = buf, *paylen;
+
+  stpropnci_tmpbuff_reset();
+
+  // send NCI_ANDROID_PASSIVE_OBSERVER_SUSPENDED_NTF
+  NCI_MSG_BLD_HDR0(pp, NCI_MT_CMD, NCI_GID_PROP);
+  NCI_MSG_BLD_HDR1(pp, ST_PROP_NCI_OID);
+  paylen = pp++;
+  UINT8_TO_STREAM(pp, ST_PROP_NCI_SET_LIB_PASSTHOUGH);
+  UINT8_TO_STREAM(pp, 0x01);  // enable passthrough
+  *paylen = pp - (paylen + 1);
+  *buflen = pp - buf;
+
+  (void)stpropnci_pump_post(MSG_DIR_TO_NFCC, stpropnci_state.tmpbuff,
+                            *stpropnci_state.tmpbufflen,
+                            stpropnci_cb_block_rsp);
+#endif  // STPROPNCI_VENDOR
+}
+
+/*******************************************************************************
+**
+** Function         stpropnci_cb_get_apdu_info
+**
+** Description      Save pipes information.
+**
+** Returns          true if success
 **
 *******************************************************************************/
 static bool stpropnci_cb_get_apdu_info(bool dir_from_upper,
@@ -691,4 +801,30 @@ bool stpropnci_prop_st_hci_reassembly_cb(bool dir_from_upper,
   }
 
   return handled;
+}
+
+/*******************************************************************************
+**
+** Function         parse_fw_ntf
+**
+** Description      This function will fragment the given packet, if necessary
+**                  and send it on the given pipe.
+**
+** Returns          status
+**
+*******************************************************************************/
+void parse_fw_ntf(const uint8_t* payload, const uint16_t payloadlen) {
+  int current_tlv_pos = 6;
+  int current_tlv_length;
+  int idx;
+
+  for (idx = 0;; ++idx) {
+    if (current_tlv_pos + 1 > payloadlen) break;
+    current_tlv_length = payload[current_tlv_pos + 1] + 2;
+    if (current_tlv_pos + current_tlv_length > payloadlen) break;
+
+    // Check SWP CLT data
+    // go to next TLV
+    current_tlv_pos = current_tlv_pos + current_tlv_length;
+  }
 }

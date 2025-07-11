@@ -29,18 +29,17 @@ PRODUCT_COPY_FILES += \
 # if eSE in OMAPI:    frameworks/native/data/etc/android.hardware.se.omapi.ese.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.se.omapi.ese.xml:st
 
 # # Stack configuration files (common for ST stack and AOSP stack)
-# Note: we install libnfc-nci.conf in vendor/etc
-# If OEM install their file in /product/etc or /odm/etc it will have priority
+# Note: we previously installed libnfc-nci.conf in vendor/etc
+# The rationale was if OEM install their file in /product/etc or /odm/etc it will have priority
 # but the default one in /system/etc has lower priority than vendor/etc
+# We now target product/etc by default for better separation of system and vendor files.
+# It is therefore now managed by NfcDeviceConfig.mk
 ifneq ($(strip $(TARGET_BUILD_VARIANT)),user)
    PRODUCT_COPY_FILES += \
-   vendor/st/opensource/commonsys/packages/modules/Nfc/libnfc-nci/conf/libnfc-nci.conf:$(TARGET_COPY_OUT_VENDOR)/etc/libnfc-nci.conf:st \
-   vendor/st/opensource/halimpl/conf/libnfc-hal-st.conf.st21nfc:$(TARGET_COPY_OUT_VENDOR)/etc/libnfc-hal-st.conf:st
+      vendor/st/opensource/halimpl/conf/libnfc-hal-st.conf.st21nfc:$(TARGET_COPY_OUT_VENDOR)/etc/libnfc-hal-st.conf:st \
 
 else
-  # Configuration files for user build, remove some logs for GSMA certif
    PRODUCT_COPY_FILES += \
-   vendor/st/opensource/commonsys/packages/modules/Nfc/libnfc-nci/conf/libnfc-nci.conf.user:$(TARGET_COPY_OUT_VENDOR)/etc/libnfc-nci.conf:st \
-   vendor/st/opensource/halimpl/conf/libnfc-hal-st.conf.st21nfc.user:$(TARGET_COPY_OUT_VENDOR)/etc/libnfc-hal-st.conf:st
+      vendor/st/opensource/halimpl/conf/libnfc-hal-st.conf.st21nfc.user:$(TARGET_COPY_OUT_VENDOR)/etc/libnfc-hal-st.conf:st \
 
 endif
