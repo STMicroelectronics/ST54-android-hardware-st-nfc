@@ -231,4 +231,19 @@ bool stpropnci_process_prop_st(bool inform_only, bool dir_from_upper,
 /* rsp: OK */
 /* NTF: bytes stored */
 
+#define ST_PROP_SET_FELICA_CARD_ENABLED 0x12
+/* command: on/off */
+/* rsp: OK */
+/* no NTF */
+
+#define ST_PROP_SET_RF_CUSTOM_POLL_FRAME 0x13
+/* command: on/off - RF frames*/
+/* rsp: OK */
+/* no NTF */
+
+#define ST_PROP_RF_INTF_ACTIV_CUST_POLL_NTF 0x14
+/* no cmd */
+/* no rsp */
+/* NTF: payload of RF_INTF_ACTIVATED_NTF */
+
 #endif  // STPROPNCI_PROP_ST_H

@@ -1084,13 +1084,13 @@ void halWrapperDataCallback(uint16_t data_len, uint8_t* p_data) {
           p_data[3] = 0x0;  // if a poweron on ntf is received in
                             // HAL_WRAPPER_STATE_READY, consider it like a
                             // unrecoverable error.
-        } else if ((p_data[0] != 0x40) && (p_data[0] != 0x60) &&
-                   (p_data[0] != 0x41) && (p_data[0] != 0x61) &&
-                   (p_data[0] != 0x42) && (p_data[0] != 0x62) &&
-                   (p_data[0] != 0x4f) && (p_data[0] != 0x6f) &&
-                   ((p_data[0] & 0xE0) != 0x00) &&
-                   ((p_data[2] > 1) && (p_data[3] == 0x60) &&
-                    (p_data[4] == 0x00))) {
+        } else if (((p_data[0] != 0x40) && (p_data[0] != 0x60) &&
+                    (p_data[0] != 0x41) && (p_data[0] != 0x61) &&
+                    (p_data[0] != 0x42) && (p_data[0] != 0x62) &&
+                    (p_data[0] != 0x4f) && (p_data[0] != 0x6f) &&
+                    ((p_data[0] & 0xE0) != 0x00)) ||
+                   (((p_data[2] > 2) && (p_data[3] == 0x60) &&
+                     (p_data[4] == 0x00) && (p_data[5] == 0x1F)))) {
           // Check if incorrect frame
           // If so, send back fabricated CORE_RESET_NTF(abnormal) to force stack
           // restart

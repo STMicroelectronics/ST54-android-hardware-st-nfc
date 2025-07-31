@@ -86,6 +86,9 @@ ISO_DEP_MAX_TRANSCEIVE=0xFEFF
 OFF_HOST_ESE_PIPE_ID=0x5E
 OFF_HOST_SIM_PIPE_ID=0x3E
 
+# In case the eSE supports MEP Cat3 eSIM, uncomment :
+# OFF_HOST_SIM_PIPE_IDS={3E:6E:7E}
+
 ###############################################################################
 #Set the default Felica T3T System Code OffHost route Location :
 #This settings will be used when application does not set this parameter
@@ -147,6 +150,9 @@ DEFAULT_ROUTE=0x81
 # UICC  0x81 (UICC_1), 0x83/5 (UICC_2)
 # eUICC Cat3  0x87 (profile 1), 0x89 (profile 2)
 OFFHOST_ROUTE_UICC={81,87,89}
+
+# In case the eSE supports MEP Cat3 eSIM, use this instead :
+# OFFHOST_ROUTE_UICC={81:87:89}
 
 ###############################################################################
 # Configure the NFCEEIDs of offhost eSEs.

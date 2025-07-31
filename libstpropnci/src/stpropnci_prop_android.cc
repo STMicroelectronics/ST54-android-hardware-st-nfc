@@ -84,7 +84,7 @@ static bool stpropnci_process_uid_and_sak_steps(bool dir_from_upper,
 static void stpropnci_prop_uid_and_sak_send_rsp(uint8_t status);
 #endif  // NCI_ANDROID_SET_UID_AND_SAK
 
-static uint16_t iso14443_crc(const uint8_t *data, size_t szLen, int type);
+uint16_t iso14443_crc(const uint8_t *data, size_t szLen, int type);
 #define CRC_PRESET_A 0x6363
 #define CRC_PRESET_B 0xFFFF
 #define Type_A 0
@@ -100,10 +100,10 @@ static uint16_t iso14443_crc(const uint8_t *data, size_t szLen, int type);
 *forwarded
 **
 *******************************************************************************/
-bool stpropnci_process_prop_android(bool inform_only, bool dir_from_upper,
-                                    const uint8_t *payload,
+bool stpropnci_process_prop_android(__attribute__((unused)) bool inform_only,
+                                    bool dir_from_upper, const uint8_t *payload,
                                     const uint16_t payloadlen, uint8_t mt,
-                                    uint8_t oid) {
+                                    __attribute__((unused)) uint8_t oid) {
   bool handled = false;
   stpropnci_tmpbuff_reset();
 
@@ -164,7 +164,10 @@ bool stpropnci_process_prop_android(bool inform_only, bool dir_from_upper,
           break;
 
         case NCI_ANDROID_SET_PASSIVE_OBSERVER_TECH:
-
+          stpropnci_state.temp_observe_per_tech_bitmap = payload[4];
+          //This should be filled when GET_CAPS is called, but it might not be
+          //called for unitary VTS tests.
+          stpropnci_state.observe_per_tech = true;
           // Prepare the native message: RF_SET_LISTEN_OBSERVE_MODE_CMD
           stpropnci_build_rf_set_listen_passive_observer_cmd(
               stpropnci_state.tmpbuff, stpropnci_state.tmpbufflen, payload[4]);
@@ -203,29 +206,41 @@ bool stpropnci_process_prop_android(bool inform_only, bool dir_from_upper,
           break;
 
         case NCI_ANDROID_SET_TECH_A_POLLING_LOOP_ANNOTATION:
-          // Prepare the native message
-          // ST_NCI_MSG_PROP_RF_SET_CUST_PASSIVE_POLL_FRAME (add CRC)
-          if (!stpropnci_build_set_custom_polling_cmd(
-                  stpropnci_state.tmpbuff, stpropnci_state.tmpbufflen, payload,
-                  payloadlen)) {
-            // the frame was not valid.
-            stpropnci_tmpbuff_reset();
+          if (!stpropnci_state.is_cust_poll_frame_set) {
+            // Prepare the native message
+            // ST_NCI_MSG_PROP_RF_SET_CUST_PASSIVE_POLL_FRAME (add CRC)
+            if (!stpropnci_build_set_custom_polling_cmd(
+                    stpropnci_state.tmpbuff, stpropnci_state.tmpbufflen,
+                    payload, payloadlen)) {
+              // the frame was not valid.
+              stpropnci_tmpbuff_reset();
+              stpropnci_build_prop_status_rsp(
+                  stpropnci_state.tmpbuff, stpropnci_state.tmpbufflen,
+                  NCI_MSG_PROP_ANDROID,
+                  NCI_ANDROID_SET_TECH_A_POLLING_LOOP_ANNOTATION,
+                  NCI_STATUS_MESSAGE_CORRUPTED);
+
+              // send it back
+              handled =
+                  stpropnci_pump_post(MSG_DIR_TO_STACK, stpropnci_state.tmpbuff,
+                                      *stpropnci_state.tmpbufflen, nullptr);
+            } else {
+              // send it to NFCC
+              handled =
+                  stpropnci_pump_post(MSG_DIR_TO_NFCC, stpropnci_state.tmpbuff,
+                                      *stpropnci_state.tmpbufflen,
+                                      stpropnci_cb_set_custom_polling_rsp);
+            }
+          } else {
             stpropnci_build_prop_status_rsp(
                 stpropnci_state.tmpbuff, stpropnci_state.tmpbufflen,
                 NCI_MSG_PROP_ANDROID,
-                NCI_ANDROID_SET_TECH_A_POLLING_LOOP_ANNOTATION,
-                NCI_STATUS_MESSAGE_CORRUPTED);
+                NCI_ANDROID_SET_TECH_A_POLLING_LOOP_ANNOTATION, NCI_STATUS_OK);
 
             // send it back
             handled =
                 stpropnci_pump_post(MSG_DIR_TO_STACK, stpropnci_state.tmpbuff,
                                     *stpropnci_state.tmpbufflen, nullptr);
-          } else {
-            // send it to NFCC
-            handled =
-                stpropnci_pump_post(MSG_DIR_TO_NFCC, stpropnci_state.tmpbuff,
-                                    *stpropnci_state.tmpbufflen,
-                                    stpropnci_cb_set_custom_polling_rsp);
           }
           break;
 #ifdef NCI_ANDROID_SET_UID_AND_SAK
@@ -270,6 +285,13 @@ bool stpropnci_process_prop_android(bool inform_only, bool dir_from_upper,
       break;
     case NCI_MT_RSP:
     case NCI_MT_NTF:
+      if (dir_from_upper == MSG_DIR_FROM_NFCC) {
+        // If we have a legacy HAL that supported some ANDROID NCI, discard it
+        // since we will generate our own here.
+        LOG_D("Discard ANDROID_NCI received from LL");
+        handled = true;
+        break;
+      }
       // This is unexpected !
       LOG_E("Unexpected RSP or NTF in NCI_ANDROID wrapper");
       break;
@@ -529,10 +551,11 @@ static void stpropnci_build_get_observer_cmd(uint8_t *buf, uint16_t *buflen) {
 ** Returns          true if the response was handled and shall not be fwded.
 **
 *******************************************************************************/
-static bool stpropnci_cb_get_observer_rsp(bool dir_from_upper,
-                                          const uint8_t *payload,
-                                          const uint16_t payloadlen, uint8_t mt,
-                                          uint8_t gid, uint8_t oid) {
+static bool stpropnci_cb_get_observer_rsp(
+    __attribute__((unused)) bool dir_from_upper, const uint8_t *payload,
+    __attribute__((unused)) const uint16_t payloadlen,
+    __attribute__((unused)) uint8_t mt, __attribute__((unused)) uint8_t gid,
+    __attribute__((unused)) uint8_t oid) {
   uint8_t *buf = stpropnci_state.tmpbuff;
   uint16_t *buflen = stpropnci_state.tmpbufflen;
   uint8_t *pp = buf, *paylen;
@@ -550,7 +573,7 @@ static bool stpropnci_cb_get_observer_rsp(bool dir_from_upper,
                             ? (((payload[4] == OBSERVE_NONE) ||
                                 (stpropnci_state.observe_mode_suspended))
                                    ? NCI_ANDROID_PASSIVE_OBSERVE_PARAM_DISABLE
-                                   : payload[4])
+                                   : stpropnci_state.observe_per_tech_bitmap)
                             : payload[7]);
   }
 
@@ -598,11 +621,11 @@ static void stpropnci_build_set_config_observer_cmd(uint8_t *buf,
 ** Returns          true if the response was handled and shall not be fwded.
 **
 *******************************************************************************/
-static bool stpropnci_cb_set_config_observer_rsp(bool dir_from_upper,
-                                                 const uint8_t *payload,
-                                                 const uint16_t payloadlen,
-                                                 uint8_t mt, uint8_t gid,
-                                                 uint8_t oid) {
+static bool stpropnci_cb_set_config_observer_rsp(
+    __attribute__((unused)) bool dir_from_upper, const uint8_t *payload,
+    __attribute__((unused)) const uint16_t payloadlen,
+    __attribute__((unused)) uint8_t mt, __attribute__((unused)) uint8_t gid,
+    __attribute__((unused)) uint8_t oid) {
   uint8_t *buf = stpropnci_state.tmpbuff;
   uint16_t *buflen = stpropnci_state.tmpbufflen;
   uint8_t *pp = buf, *paylen;
@@ -644,11 +667,10 @@ static bool stpropnci_cb_set_config_observer_rsp(bool dir_from_upper,
 #define FORMAT_IS_ST54J(f) (((f) & 0xF0) == 0x20)
 #define FORMAT_IS_ST54L(f) (((f) & 0xF0) == 0x30)
 
-static bool stpropnci_cb_generate_polling_loop_frame(bool dir_from_upper,
-                                                     const uint8_t *payload,
-                                                     const uint16_t payloadlen,
-                                                     uint8_t mt, uint8_t gid,
-                                                     uint8_t oid) {
+static bool stpropnci_cb_generate_polling_loop_frame(
+    __attribute__((unused)) bool dir_from_upper, const uint8_t *payload,
+    const uint16_t payloadlen, __attribute__((unused)) uint8_t mt,
+    __attribute__((unused)) uint8_t gid, __attribute__((unused)) uint8_t oid) {
   uint8_t *buf = stpropnci_state.tmpbuff;
   uint16_t *buflen = stpropnci_state.tmpbufflen;
   uint8_t *pp = buf, *paylen;
@@ -656,7 +678,6 @@ static bool stpropnci_cb_generate_polling_loop_frame(bool dir_from_upper,
   uint8_t format = payload[3];
   int current_tlv_pos = 6;  // position of first byte of the first TLV
   int current_tlv_length;
-  int idx;
   int conv_tlv = 0;
   uint32_t ts = 0;
 
@@ -669,7 +690,7 @@ static bool stpropnci_cb_generate_polling_loop_frame(bool dir_from_upper,
   UINT8_TO_STREAM(pp, NCI_ANDROID_POLLING_FRAME_NTF);
 
   // Parse TLVs from the FW log notification.
-  for (idx = 0;; ++idx) {
+  while (1) {
     uint8_t T;
     bool process = false;
 
@@ -723,10 +744,10 @@ static bool stpropnci_cb_generate_polling_loop_frame(bool dir_from_upper,
              payload[current_tlv_pos + current_tlv_length - 1];
         if ((format & 0x30) == 0x30) {
           // ST54L: 3.95us unit
-          ts = (uint32_t)((((long long)ts * 1024) / 259) + 0.5);
+          ts = (uint32_t)(((double)((long long)ts * 1024) / 259) + 0.5);
         } else {
           // ST54J/K: 4.57us unit
-          ts = (uint32_t)((((long long)ts * 128) / 28) + 0.5);
+          ts = (uint32_t)(((double)((long long)ts * 128) / 28) + 0.5);
         }
       }
 
@@ -926,8 +947,10 @@ static void stpropnci_build_rf_set_listen_passive_observer_cmd(uint8_t *buf,
 **
 *******************************************************************************/
 static bool stpropnci_cb_rf_set_listen_passive_observer_rsp(
-    bool dir_from_upper, const uint8_t *payload, const uint16_t payloadlen,
-    uint8_t mt, uint8_t gid, uint8_t oid) {
+    __attribute__((unused)) bool dir_from_upper, const uint8_t *payload,
+    __attribute__((unused)) const uint16_t payloadlen,
+    __attribute__((unused)) uint8_t mt, __attribute__((unused)) uint8_t gid,
+    __attribute__((unused)) uint8_t oid) {
   uint8_t *buf = stpropnci_state.tmpbuff;
   uint16_t *buflen = stpropnci_state.tmpbufflen;
   uint8_t *pp = buf, *paylen;
@@ -940,6 +963,12 @@ static bool stpropnci_cb_rf_set_listen_passive_observer_rsp(
   paylen = pp++;
   UINT8_TO_STREAM(pp, NCI_ANDROID_SET_PASSIVE_OBSERVER_TECH);
   UINT8_TO_STREAM(pp, payload[3]);
+
+  if (payload[3] == NCI_STATUS_OK) {
+    stpropnci_state.observe_per_tech_bitmap =
+        stpropnci_state.temp_observe_per_tech_bitmap;
+  }
+
 
   // Update the pending fields
   *paylen = pp - (paylen + 1);
@@ -1123,11 +1152,11 @@ static bool stpropnci_build_set_exit_frame_cmd(uint8_t *buf, uint16_t *buflen,
 ** Returns          true if the response was handled and shall not be fwded.
 **
 *******************************************************************************/
-static bool stpropnci_cb_set_exit_frame_rsp(bool dir_from_upper,
-                                            const uint8_t *payload,
-                                            const uint16_t payloadlen,
-                                            uint8_t mt, uint8_t gid,
-                                            uint8_t oid) {
+static bool stpropnci_cb_set_exit_frame_rsp(
+    __attribute__((unused)) bool dir_from_upper, const uint8_t *payload,
+    __attribute__((unused)) const uint16_t payloadlen,
+    __attribute__((unused)) uint8_t mt, __attribute__((unused)) uint8_t gid,
+    __attribute__((unused)) uint8_t oid) {
   uint8_t *buf = stpropnci_state.tmpbuff;
   uint16_t *buflen = stpropnci_state.tmpbufflen;
   uint8_t *pp = buf, *paylen;
@@ -1255,11 +1284,11 @@ static bool stpropnci_build_set_custom_polling_cmd(uint8_t *buf,
 ** Returns          true if the response was handled and shall not be fwded.
 **
 *******************************************************************************/
-static bool stpropnci_cb_set_custom_polling_rsp(bool dir_from_upper,
-                                                const uint8_t *payload,
-                                                const uint16_t payloadlen,
-                                                uint8_t mt, uint8_t gid,
-                                                uint8_t oid) {
+static bool stpropnci_cb_set_custom_polling_rsp(
+    __attribute__((unused)) bool dir_from_upper, const uint8_t *payload,
+    __attribute__((unused)) const uint16_t payloadlen,
+    __attribute__((unused)) uint8_t mt, __attribute__((unused)) uint8_t gid,
+    __attribute__((unused)) uint8_t oid) {
   uint8_t *buf = stpropnci_state.tmpbuff;
   uint16_t *buflen = stpropnci_state.tmpbufflen;
   uint8_t *pp = buf, *paylen;
@@ -1291,11 +1320,12 @@ static bool stpropnci_cb_set_custom_polling_rsp(bool dir_from_upper,
 ** Returns          true if the response was handled and shall not be fwded.
 **
 *******************************************************************************/
-static bool stpropnci_cb_observe_mode_suspend(bool dir_from_upper,
-                                              const uint8_t *payload,
-                                              const uint16_t payloadlen,
-                                              uint8_t mt, uint8_t gid,
-                                              uint8_t oid) {
+static bool stpropnci_cb_observe_mode_suspend(
+    __attribute__((unused)) bool dir_from_upper,
+    __attribute__((unused)) const uint8_t *payload,
+    __attribute__((unused)) const uint16_t payloadlen,
+    __attribute__((unused)) uint8_t mt, __attribute__((unused)) uint8_t gid,
+    __attribute__((unused)) uint8_t oid) {
   // Shall we report this to stack ?
   LOG_D("Exit frame: observe mode is %s",
         oid == ST_NCI_MSG_PROP_RF_OBSERVE_MODE_SUSPENDED ? "suspended"
@@ -1314,7 +1344,7 @@ static bool stpropnci_cb_observe_mode_suspend(bool dir_from_upper,
 ** Returns          the CRC
 **
 *******************************************************************************/
-static uint16_t iso14443_crc(const uint8_t *data, size_t szLen, int type) {
+uint16_t iso14443_crc(const uint8_t *data, size_t szLen, int type) {
   uint16_t tempCrc;
   if (type == Type_A) {
     tempCrc = (unsigned short)CRC_PRESET_A;
@@ -1372,11 +1402,11 @@ static void stpropnci_build_get_prop_config_cmd(uint8_t *buf,
 ** Returns          true if the response was handled and shall not be fwded.
 **
 *******************************************************************************/
-static bool stpropnci_process_uid_and_sak_steps(bool dir_from_upper,
-                                                const uint8_t *payload,
-                                                const uint16_t payloadlen,
-                                                uint8_t mt, uint8_t gid,
-                                                uint8_t oid) {
+static bool stpropnci_process_uid_and_sak_steps(
+    __attribute__((unused)) bool dir_from_upper, const uint8_t *payload,
+    __attribute__((unused)) const uint16_t payloadlen,
+    __attribute__((unused)) uint8_t mt, __attribute__((unused)) uint8_t gid,
+    __attribute__((unused)) uint8_t oid) {
   uint8_t *buf = stpropnci_state.tmpbuff;
   uint16_t *buflen = stpropnci_state.tmpbufflen;
   uint8_t *pp = buf, *paylen;

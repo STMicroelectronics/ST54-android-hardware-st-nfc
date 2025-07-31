@@ -40,6 +40,24 @@ bool stpropnci_prop_st_hci_reassembly_cb(bool dir_from_upper,
 static bool stpropnci_prop_st_cb_apdu_gate_transceive(
     const uint8_t* payload, const uint16_t payloadlen);
 void parse_fw_ntf(const uint8_t* payload, const uint16_t payloadlen);
+void eseMonitor(uint8_t format, uint16_t data_len, const uint8_t* p_data,
+                bool last);
+static bool stpropnci_prop_st_cb_set_custom_polling_rsp(
+    bool dir_from_upper, const uint8_t* payload, const uint16_t payloadlen,
+    uint8_t mt, uint8_t gid, uint8_t oid);
+static bool stpropnci_prop_st_build_set_custom_polling_cmd(
+    uint8_t* buf, uint16_t* buflen, const uint8_t* incoming,
+    const uint16_t incominglen);
+extern uint16_t iso14443_crc(const uint8_t* data, size_t szLen, int type);
+
+static bool stpropnci_cb_disable_ese_rsp(bool dir_from_upper,
+                                         const uint8_t* payload,
+                                         const uint16_t payloadlen, uint8_t mt,
+                                         uint8_t gid, uint8_t oid);
+static bool stpropnci_cb_reset_ese_rsp(bool dir_from_upper,
+                                       const uint8_t* payload,
+                                       const uint16_t payloadlen, uint8_t mt,
+                                       uint8_t gid, uint8_t oid);
 
 static const uint8_t ESE_ATR_REG_IDX = 0x01;
 static const uint8_t EVT_SE_SOFT_RESET = 0x11;
@@ -265,6 +283,52 @@ bool stpropnci_process_prop_st(bool inform_only, bool dir_from_upper,
                                       *stpropnci_state.tmpbufflen, nullptr);
             } break;
 
+            case ST_PROP_SET_FELICA_CARD_ENABLED:
+              stpropnci_state.is_ese_felica_enabled =
+                  ((payload[4] & 0xFF) == 0x01 ? true : false);
+
+              NCI_MSG_BLD_HDR0(pp, NCI_MT_RSP, NCI_GID_PROP);
+              NCI_MSG_BLD_HDR1(pp, ST_PROP_NCI_OID);
+              paylen = pp++;
+              UINT8_TO_STREAM(pp, ST_PROP_SET_FELICA_CARD_ENABLED);
+              UINT8_TO_STREAM(pp, NCI_STATUS_OK);
+              *paylen = pp - (paylen + 1);
+              *buflen = pp - buf;
+              // send it back
+              handled =
+                  stpropnci_pump_post(MSG_DIR_TO_STACK, stpropnci_state.tmpbuff,
+                                      *stpropnci_state.tmpbufflen, nullptr);
+              break;
+
+            case ST_PROP_SET_RF_CUSTOM_POLL_FRAME:
+              stpropnci_state.is_cust_poll_frame_set =
+                  ((payload[4] & 0xFF) >= 0x01 ? true : false);
+              stpropnci_state.is_rf_intf_cust_tx = false;
+              // Prepare the native message
+              // ST_NCI_MSG_PROP_RF_SET_CUST_PASSIVE_POLL_FRAME (add CRC)
+              if (!stpropnci_prop_st_build_set_custom_polling_cmd(
+                      stpropnci_state.tmpbuff, stpropnci_state.tmpbufflen,
+                      payload, payloadlen)) {
+                // the frame was not valid.
+                stpropnci_tmpbuff_reset();
+                stpropnci_build_prop_status_rsp(
+                    stpropnci_state.tmpbuff, stpropnci_state.tmpbufflen,
+                    ST_PROP_NCI_OID, ST_PROP_SET_RF_CUSTOM_POLL_FRAME,
+                    NCI_STATUS_MESSAGE_CORRUPTED);
+
+                // send it back
+                handled = stpropnci_pump_post(
+                    MSG_DIR_TO_STACK, stpropnci_state.tmpbuff,
+                    *stpropnci_state.tmpbufflen, nullptr);
+              } else {
+                // send it to NFCC
+                handled = stpropnci_pump_post(
+                    MSG_DIR_TO_NFCC, stpropnci_state.tmpbuff,
+                    *stpropnci_state.tmpbufflen,
+                    stpropnci_prop_st_cb_set_custom_polling_rsp);
+              }
+              break;
+
             default:
               LOG_I("ST OID(1) suboid %02hhx not supported", payload[3]);
               stpropnci_build_prop_status_rsp(
@@ -481,10 +545,10 @@ void stpropnci_st_set_hal_passthrough() {
 ** Returns          true if success
 **
 *******************************************************************************/
-static bool stpropnci_cb_get_apdu_info(bool dir_from_upper,
-                                       const uint8_t* payload,
-                                       const uint16_t payloadlen, uint8_t mt,
-                                       uint8_t gid, uint8_t oid) {
+static bool stpropnci_cb_get_apdu_info(
+    __attribute__((unused)) bool dir_from_upper, const uint8_t* payload,
+    const uint16_t payloadlen, __attribute__((unused)) uint8_t mt,
+    __attribute__((unused)) uint8_t gid, __attribute__((unused)) uint8_t oid) {
   // Check status
   if (payload[3] != 0x00) {
     LOG_E(" status NOK");
@@ -521,6 +585,7 @@ static bool stpropnci_cb_get_apdu_info(bool dir_from_upper,
 **
 *******************************************************************************/
 static bool stpropnci_prop_st_cb_apdu_gate_atr(const uint8_t* payload,
+                                               __attribute__((unused))
                                                const uint16_t payloadlen) {
   // Try and get the BWI value in ATR response
   uint8_t bwi_idx = 3 /*1*/, level = 1, nb_bit_set, bwi;
@@ -748,10 +813,11 @@ bool stpropnci_prop_st_send_hci(uint8_t pipe_id, uint8_t type,
 ** Returns          status
 **
 *******************************************************************************/
-bool stpropnci_prop_st_hci_reassembly_cb(bool dir_from_upper,
-                                         const uint8_t* payload,
-                                         const uint16_t payloadlen, uint8_t mt,
-                                         uint8_t gid, uint8_t oid) {
+bool stpropnci_prop_st_hci_reassembly_cb(
+    __attribute__((unused)) bool dir_from_upper, const uint8_t* payload,
+    __attribute__((unused)) const uint16_t payloadlen,
+    __attribute__((unused)) uint8_t mt, __attribute__((unused)) uint8_t gid,
+    __attribute__((unused)) uint8_t oid) {
   const uint8_t* pp;
   uint8_t cb, pbf, cid, instruction;
   uint8_t *ps, *pd;
@@ -816,15 +882,341 @@ bool stpropnci_prop_st_hci_reassembly_cb(bool dir_from_upper,
 void parse_fw_ntf(const uint8_t* payload, const uint16_t payloadlen) {
   int current_tlv_pos = 6;
   int current_tlv_length;
-  int idx;
 
-  for (idx = 0;; ++idx) {
+  while (1) {
     if (current_tlv_pos + 1 > payloadlen) break;
     current_tlv_length = payload[current_tlv_pos + 1] + 2;
     if (current_tlv_pos + current_tlv_length > payloadlen) break;
 
-    // Check SWP CLT data
+    // check that eSE behavior is OK ( no repeat frames)
+    eseMonitor(payload[3], current_tlv_length, payload + current_tlv_pos,
+               current_tlv_pos + current_tlv_length >= payloadlen);
+
     // go to next TLV
     current_tlv_pos = current_tlv_pos + current_tlv_length;
   }
+}
+
+/*******************************************************************************
+**
+** Function         stpropnci_build_set_custom_polling_cmd
+**
+** Description      Prepare the ST_NCI_MSG_PROP_RF_SET_CUST_PASSIVE_POLL_FRAME
+**                  based on Android NCI command, but some params need to be
+*remaped a bit.
+**
+** Returns          none
+**
+*******************************************************************************/
+static bool stpropnci_prop_st_build_set_custom_polling_cmd(
+    uint8_t* buf, uint16_t* buflen, const uint8_t* incoming,
+    const uint16_t incominglen) {
+  const uint8_t* in;
+  uint16_t remaining = incominglen;
+  uint8_t *pp = buf, *paylen;
+  uint8_t nb_frames = 0, motiflen = 0, frame_type = 0, is_crc = 0;
+  NCI_MSG_BLD_HDR0(pp, NCI_MT_CMD, NCI_GID_PROP);  // idx 0
+  NCI_MSG_BLD_HDR1(pp, ST_NCI_MSG_PROP_RF_SET_CUST_PASSIVE_POLL_FRAME);  // idx
+                                                                         // 1
+  paylen = pp++;  // idx 2
+
+  if (remaining < (3 + 2)) {
+    LOG_E("ST_NCI_MSG_PROP_RF_SET_CUST_PASSIVE_POLL_FRAME too short");
+    return false;
+  }
+
+  in = incoming + 4;  // beginning of the payload
+  nb_frames = *in;
+  if (nb_frames > 4) {
+    LOG_E(
+        "ST_NCI_MSG_PROP_RF_SET_CUST_PASSIVE_POLL_FRAME unsupported number of "
+        "frames");
+    return false;
+  }
+
+  UINT8_TO_STREAM(pp, *in++);  // nb_frames - idx 3
+  remaining -= 5;
+  if ((nb_frames > 0) && (remaining < 4)) {
+    LOG_E("ST_NCI_MSG_PROP_RF_SET_CUST_PASSIVE_POLL_FRAME too short");
+    return false;
+  }
+
+  if (nb_frames) {
+    uint16_t crc = 0;
+
+    while (nb_frames--) {
+      frame_type = (*in & 0x07);
+
+      UINT8_TO_STREAM(pp, *in++);  // qual-type - idx 4
+
+      // pointing to lengh: length RF frame = length - waiting time byte
+      motiflen = *in - 1;
+
+      is_crc = (*(in + 1) & 0x80) >> 7;
+      UINT8_TO_STREAM(pp, *in++ + ((is_crc != 0) ? 2 : 0));  // length - idx 5
+      UINT8_TO_STREAM(pp, *in++);  // waiting time - idx 6
+
+      if ((is_crc != 0) && (frame_type <= NFC_B_FRAME)) {
+        crc = iso14443_crc(in, motiflen, frame_type);
+      }
+
+      ARRAY_TO_STREAM(pp, in, motiflen);
+      in += motiflen;
+
+      if (is_crc != 0) {
+        UINT8_TO_STREAM(pp, (uint8_t)(crc & 0xFF));
+        UINT8_TO_STREAM(pp, (uint8_t)(crc >> 8));
+      }
+    }
+  }
+
+  // Update the pending fields
+  *paylen = pp - (paylen + 1);
+  *buflen = pp - buf;
+  return true;
+}
+
+/*******************************************************************************
+**
+** Function         stpropnci_cb_set_custom_polling_rsp
+**
+** Description      Process the response from
+*ST_NCI_MSG_PROP_RF_SET_CUST_PASSIVE_POLL_FRAME
+**
+** Returns          true if the response was handled and shall not be fwded.
+**
+*******************************************************************************/
+static bool stpropnci_prop_st_cb_set_custom_polling_rsp(
+    bool dir_from_upper, const uint8_t* payload, const uint16_t payloadlen,
+    uint8_t mt, uint8_t gid, uint8_t oid) {
+  uint8_t* buf = stpropnci_state.tmpbuff;
+  uint16_t* buflen = stpropnci_state.tmpbufflen;
+  uint8_t *pp = buf, *paylen;
+
+  stpropnci_tmpbuff_reset();
+
+  // build the response to stack
+  NCI_MSG_BLD_HDR0(pp, NCI_MT_RSP, NCI_GID_PROP);
+  NCI_MSG_BLD_HDR1(pp, ST_PROP_NCI_OID);
+  paylen = pp++;
+  UINT8_TO_STREAM(pp, ST_PROP_SET_RF_CUSTOM_POLL_FRAME);
+  UINT8_TO_STREAM(pp, payload[3]);
+
+  // Update the pending fields
+  *paylen = pp - (paylen + 1);
+  *buflen = pp - buf;
+
+  return stpropnci_pump_post(MSG_DIR_TO_STACK, stpropnci_state.tmpbuff,
+                             *stpropnci_state.tmpbufflen, nullptr);
+}
+
+/*******************************************************************************
+**
+** Function         eseMonitor
+**
+** Description      Checks FW logs to detect any abnormal SWP flow
+**
+** Returns          -
+**
+*******************************************************************************/
+void eseMonitor(uint8_t format, uint16_t data_len, const uint8_t* p_data,
+                bool last) {
+  uint8_t* buf = stpropnci_state.tmpbuff;
+  uint16_t* buflen = stpropnci_state.tmpbufflen;
+  uint8_t *pp = buf, *paylen;
+
+  if ((format & 0x1) == 1) {
+    data_len -= 4;  // ignore the timestamp
+  }
+
+  if (p_data[0] == FWLOG_T_SwpDeact) {
+    // SWP deactivated, we clear our state
+    stpropnci_state.last_tx_cnt = 0;
+    stpropnci_state.last_tx_len = 0;
+    if (stpropnci_state.last_rx_param_len) {
+      LOG_D("clear saved param on deact");
+    }
+    stpropnci_state.last_rx_param_len = 0;
+    stpropnci_state.last_rx_is_frag[0] = false;
+    stpropnci_state.last_rx_is_frag[1] = false;
+    stpropnci_state.last_rx_is_frag[2] = false;
+    stpropnci_state.last_rx_is_frag[3] = false;
+    return;
+  }
+
+  if (data_len <= 2) return;
+
+  if (p_data[2] != 0x01) {
+    // if it is an SWP log, it s not for eSE, we can return
+    return;
+  }
+
+  if (p_data[0] >= FWLOG_T_RxAct && p_data[0] <= FWLOG_T_RxErr) {
+    // We received something, we can reset Tx counter
+    stpropnci_state.last_tx_cnt = 0;
+    stpropnci_state.last_tx_len = 0;
+
+    // check if it is a ANY_SET_PARAM e.g. TT LL SS RL 86 A3 01 07 00
+    if ((data_len >= 8) && ((p_data[4] & 0xC0) == 0x80)) {
+      bool has_cb = (p_data[5] & 0x80) == 0x80;
+      bool is_first_frag = true;
+      uint8_t pid = p_data[5] & 0x7F;
+
+      // manage fragmented frames on pipes 21~24.
+      if (pid >= 0x21 && pid <= 0x24) {
+        if (stpropnci_state.last_rx_is_frag[pid - 0x21]) {
+          // we got a fragment before
+          is_first_frag = false;
+        }
+        stpropnci_state.last_rx_is_frag[pid - 0x21] = !has_cb;
+      }
+
+      // I frame
+      if (is_first_frag && (pid >= 0x21)           // one of the card gates
+          && (pid <= 0x24) && (p_data[6] == 0x01)  // ANY-SET_PARAM
+      ) {
+        // This is an ANY_SET-PARAM
+        int newParamLen =
+            data_len -
+            4;  // this is at least 4 for II + pID + cmd + the param ID
+        // same as last one ?
+        if ((stpropnci_state.last_rx_param_len == newParamLen) &&
+            ((p_data[4] & 0x38) != (stpropnci_state.last_rx_param[0] &
+                                    0x38))  // N(S) increased, it s not the
+                                            // same I-frame resent (RNR case)
+            &&
+            (!memcmp(p_data + 5,  // but the SET-PARAM data is the same
+                     stpropnci_state.last_rx_param + 1,
+                     (newParamLen < (int)sizeof(stpropnci_state.last_rx_param))
+                         ? (newParamLen - 1)
+                         : (sizeof(stpropnci_state.last_rx_param) - 1)))) {
+          LOG_E("Same ANY-SET_PARAM received from eSE twice, maybe stuck");
+          // abort(); // disable at the moment, some cases are abnormal but eSE
+          // not stuck.
+        } else {
+          // save this param
+          stpropnci_state.last_rx_param_len = newParamLen;
+          memcpy(stpropnci_state.last_rx_param, p_data + 4,
+                 newParamLen < (int)sizeof(stpropnci_state.last_rx_param)
+                     ? newParamLen
+                     : sizeof(stpropnci_state.last_rx_param));
+          LOG_D("saved param: %02hhx", p_data[7]);
+        }
+      } else {
+        // we received an I-frame but it is not ANY-SET-PARAM
+        if (is_first_frag && (stpropnci_state.last_rx_param_len != 0)) {
+          LOG_D(" clear saved param");
+          stpropnci_state.last_rx_param_len = 0;
+        }
+      }
+    }
+  }
+
+  if (p_data[0] > FWLOG_T_TxAct && p_data[0] <= FWLOG_T_TxIr) {
+    // CLF sent this frame, compare and record.
+    if ((data_len == stpropnci_state.last_tx_len) &&
+        !memcmp(stpropnci_state.last_tx, p_data + 2,
+                data_len < 7 ? data_len - 2 : 5)) {
+      // identical with the last frame we sent
+      stpropnci_state.last_tx_cnt++;
+      if (stpropnci_state.last_tx_cnt >= 30) {
+        // Send PROP_TEST_RESET_ST54J_SE then restart NFC
+        LOG_E(
+            "Same frame repeat on SWP, Start task disable/reset eSE, restart "
+            "service");
+        stpropnci_state.is_ese_stuck = true;
+        // Send CMD to disable eSE
+        NCI_MSG_BLD_HDR0(pp, NCI_MT_CMD, NCI_GID_EE_MANAGE);
+        NCI_MSG_BLD_HDR1(pp, NCI_MSG_NFCEE_MODE_SET);
+        paylen = pp++;
+        UINT8_TO_STREAM(pp, 0x86);
+        UINT8_TO_STREAM(pp, 0x00);
+
+        *paylen = pp - (paylen + 1);
+        *buflen = pp - buf;
+        // send it back
+        stpropnci_pump_post(MSG_DIR_TO_NFCC, stpropnci_state.tmpbuff,
+                            *stpropnci_state.tmpbufflen,
+                            stpropnci_cb_disable_ese_rsp);
+      }
+    } else {
+      // different frame, store this one
+      stpropnci_state.last_tx_cnt = 0;
+      memcpy(stpropnci_state.last_tx, p_data + 2,
+             data_len < 7 ? data_len - 2 : 5);
+      stpropnci_state.last_tx_len = data_len;
+    }
+  }
+}
+
+/*******************************************************************************
+**
+** Function         stpropnci_cb_disable_ese_rsp
+**
+** Description      SWP was disabled with the eSE, now reset it.
+**
+** Returns          true if success
+**
+*******************************************************************************/
+static bool stpropnci_cb_disable_ese_rsp(
+    __attribute__((unused)) bool dir_from_upper, const uint8_t* payload,
+    const uint16_t payloadlen, __attribute__((unused)) uint8_t mt,
+    __attribute__((unused)) uint8_t gid, __attribute__((unused)) uint8_t oid) {
+  uint8_t* buf = stpropnci_state.tmpbuff;
+  uint16_t* buflen = stpropnci_state.tmpbufflen;
+  uint8_t *pp = buf, *paylen;
+
+  // Check status
+  if (payload[3] != 0x00) {
+    LOG_E(" status NOK");
+  } else {
+    // Stop eSE
+    uint8_t ese_id[] = {0x86};
+    // Send CMD to reset eSE
+    NCI_MSG_BLD_HDR0(pp, NCI_MT_CMD, NCI_GID_PROP);
+    NCI_MSG_BLD_HDR1(pp, ST_NCI_MSG_PROP_TEST);
+    paylen = pp++;
+    UINT8_TO_STREAM(pp, ST_NCI_PROP_TEST_RESET_ST54J_SE);
+    ARRAY_TO_STREAM(pp, ese_id, sizeof(ese_id));
+
+    *paylen = pp - (paylen + 1);
+    *buflen = pp - buf;
+    // send it back
+    return stpropnci_pump_post(MSG_DIR_TO_NFCC, stpropnci_state.tmpbuff,
+                               *stpropnci_state.tmpbufflen,
+                               stpropnci_cb_reset_ese_rsp);
+  }
+
+  return true;
+}
+
+/*******************************************************************************
+**
+** Function         stpropnci_cb_reset_ese_rsp
+**
+** Description      eSE has been reset, now emit a fake core_reset_ntf to reset
+*stack
+**
+** Returns          true if success
+**
+*******************************************************************************/
+static bool stpropnci_cb_reset_ese_rsp(
+    __attribute__((unused)) bool dir_from_upper, const uint8_t* payload,
+    const uint16_t payloadlen, __attribute__((unused)) uint8_t mt,
+    __attribute__((unused)) uint8_t gid, __attribute__((unused)) uint8_t oid) {
+  uint8_t* buf = stpropnci_state.tmpbuff;
+  uint16_t* buflen = stpropnci_state.tmpbufflen;
+  uint8_t *pp = buf, *paylen;
+
+  // Check status
+  if (payload[3] != 0x00) {
+    LOG_E(" status NOK");
+  } else {
+    // send it back
+    stpropnci_state.is_ese_stuck = false;
+    LOG_D("Send CORE_RESET_NTF for ESE stuck detected");
+    return stpropnci_send_core_reset_ntf_recovery(0x00);
+  }
+
+  return true;
 }

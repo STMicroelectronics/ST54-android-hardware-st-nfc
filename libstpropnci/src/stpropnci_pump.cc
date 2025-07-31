@@ -99,7 +99,7 @@ static msg_t* message_pop_first_except(msg_t* queue, int* ctr,
 }
 
 // remove from queue in last position
-static msg_t* message_pop_last(msg_t* queue, int* ctr) {
+__attribute__((unused)) static msg_t* message_pop_last(msg_t* queue, int* ctr) {
   msg_t *p = queue, *r = nullptr;
   if (p->next == nullptr) {
     // queue is empty
@@ -206,9 +206,9 @@ static void message_pool_put(msg_t* m) {
 // Compare two timespecs, returns >0 if 'a' is later than 'b'
 static int tscmp(struct timespec a, struct timespec b) {
   if (a.tv_sec == b.tv_sec)
-    return a.tv_nsec - b.tv_nsec;
+    return (int)(a.tv_nsec - b.tv_nsec);
   else
-    return a.tv_sec - b.tv_sec;
+    return (int)(a.tv_sec - b.tv_sec);
 }
 
 // add ms to ts
@@ -329,7 +329,7 @@ static void wd_pool_put(watchdog_t* w) {
 ** Returns          (ignored)
 **
 *******************************************************************************/
-static void* message_pump_thr(void* st) {
+static void* message_pump_thr(__attribute__((unused)) void* st) {
   LOG_D("starting");
   (void)pthread_mutex_lock(&stpropnci_state.pumpstate.pump_mtx);
   do {

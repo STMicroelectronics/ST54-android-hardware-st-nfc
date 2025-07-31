@@ -336,7 +336,7 @@ static void* I2cWorkerThread(void* arg) {
       reset[9] = '\0';
       lseek(notifyResetRequest, 0, SEEK_SET);
       byte = read(notifyResetRequest, &reset, sizeof(reset));
-      if (byte < 10) {
+      if (byte >= 0 && byte < 10) {
         reset[byte] = '\0';
       }
       if (byte > 0 && reset[0] == '1' && resetting == false) {
@@ -389,7 +389,7 @@ bool I2cOpenLayer(void* dev, HAL_CALLBACK callb, HALHANDLE* pHandle) {
   if (!GetStrValue(NAME_ST_NFC_DEV_NODE, (char*)nfc_dev_node,
                    sizeof(nfc_dev_node))) {
     STLOG_HAL_D("Open /dev/st21nfc\n");
-    strcpy(nfc_dev_node, "/dev/st21nfc");
+    strlcpy(nfc_dev_node, "/dev/st21nfc", sizeof(nfc_dev_node));
   }
   /*Read nfcc reset request sysfs*/
   if (GetStrValue(NAME_ST_NFC_RESET_REQ_SYSFS, (char*)nfc_reset_req_node,

@@ -60,10 +60,23 @@ bool stpropnci_process_std(bool inform_only, bool dir_from_upper,
         if (dir_from_upper == MSG_DIR_FROM_STACK) {
           // save the timestamp
           (void)clock_gettime(CLOCK_MONOTONIC, &stpropnci_state.ts_last_rf_tx);
+          if (stpropnci_state.is_reader_activation && (payloadlen == 3)) {
+            stpropnci_state.is_tx_empty_iframe = true;
+          }
         } else {
           // clear timestamp
           memset(&stpropnci_state.ts_last_rf_tx, 0,
                  sizeof(stpropnci_state.ts_last_rf_tx));
+
+          if (stpropnci_state.is_reader_activation && (payloadlen == 3)) {
+            if (stpropnci_state.is_tx_empty_iframe) {
+              stpropnci_state.is_tx_empty_iframe = false;
+            } else {
+              // trash frame
+              LOG_D("Discard received empty I Frame (not pres check)");
+              handled = true;
+            }
+          }
         }
         break;
 
@@ -164,7 +177,7 @@ bool stpropnci_process_std(bool inform_only, bool dir_from_upper,
             uint8_t idx = 5;
             uint8_t nb_entries = 0;
             uint8_t route_a = 0x00, route_b = 0x00, idx_a = 0, idx_b = 0,
-                    idx_block;
+                    idx_block, idx_f = 0, route_f = 0x00;
             // Check routing for listen tech
             while (nb_entries < payload[4]) {
               // Check if entry type if tech routing
@@ -175,6 +188,9 @@ bool stpropnci_process_std(bool inform_only, bool dir_from_upper,
                 } else if (payload[idx + 4] == NCI_RF_TECHNOLOGY_B) {
                   idx_b = idx;
                   route_b = payload[idx + 2];
+                } else if (payload[idx + 4] == NCI_RF_TECHNOLOGY_F) {
+                  idx_f = idx;
+                  route_f = payload[idx + 2];
                 }
               }
               idx += (payload[idx + 1] + 2);
@@ -195,22 +211,35 @@ bool stpropnci_process_std(bool inform_only, bool dir_from_upper,
               handled =
                   stpropnci_pump_post(MSG_DIR_TO_NFCC, stpropnci_state.tmpbuff,
                                       *stpropnci_state.tmpbufflen, nullptr);
-            } else if ((route_a != route_b) && (idx_a != 0) && (idx_b != 0)) {
-              LOG_D(
-                  "route_a=0x%x, route_b=0x%x, not same route, block tech "
-                  "routed to DH",
-                  route_a, route_b);
-              // If route is 0, means this tech was not supported by original
-              // route. This is the one we want to block.
-              if (route_a == 0x00) {
-                idx_block = idx_a;
-              } else {
-                idx_block = idx_b;
-              }
+            } else {
               memcpy(pp, payload, payloadlen);
-              pp[idx_block] |= 0x40;
-              // No power states allowed
-              pp[idx_block + 3] = 0x00;
+
+              if ((route_a != route_b) && (idx_a != 0) && (idx_b != 0)) {
+                LOG_D(
+                    "route_a=0x%x, route_b=0x%x, not same route, block tech "
+                    "routed to DH",
+                    route_a, route_b);
+                // If route is 0, means this tech was not supported by original
+                // route. This is the one we want to block.
+                if (route_a == 0x00) {
+                  idx_block = idx_a;
+                } else {
+                  idx_block = idx_b;
+                }
+                pp[idx_block] |= 0x40;
+                // No power states allowed
+                pp[idx_block + 3] = 0x00;
+              }
+
+              if (!stpropnci_state.is_ese_felica_enabled) {
+                if (route_f == 0x86 && idx_f != 0) {
+                  LOG_D("Routing techF to DH");
+                  // Route Tech F to DH
+                  // Power states: 0x11 (switched ON, screen unlocked)
+                  pp[idx_f + 2] = 0x00;
+                  pp[idx_f + 3] = 0x11;
+                }
+              }
 
               *buflen = payloadlen;
               // send it
@@ -238,6 +267,97 @@ bool stpropnci_process_std(bool inform_only, bool dir_from_upper,
             // Stop the pwr_mon watchdog
             stpropnci_pump_watchdog_remove(WD_ACTIVE_RW_TOO_LONG);
             stpropnci_state.pwr_mon_errorCount = 0;
+
+            // Check if activated in reader mode
+            if ((payload[6] < NCI_DISCOVERY_TYPE_LISTEN_A)) {
+              stpropnci_state.is_reader_activation = true;
+            } else {
+              stpropnci_state.is_reader_activation = false;
+            }
+
+            // Check custom polling activation
+            if (payload[6] == NFC_CUST_PASSIVE_POLL_MODE) {
+              int len_tp = payload[9] - 2;
+              uint8_t rf_tech_mode = NFC_DISCOVERY_TYPE_POLL_A;
+
+              // Only send the prop NTF once
+              if (!stpropnci_state.is_rf_intf_cust_tx) {
+                // Send received RF_INTF_ACTIVATED_NTF as prop OID NTF to ST OEM
+                // extensions
+                NCI_MSG_BLD_HDR0(pp, NCI_MT_NTF, NCI_GID_PROP);
+                NCI_MSG_BLD_HDR1(pp, ST_PROP_NCI_OID);
+                paylen = pp++;
+                UINT8_TO_STREAM(pp, ST_PROP_RF_INTF_ACTIV_CUST_POLL_NTF);
+                ARRAY_TO_STREAM(pp, payload + 3, payload[2]);
+                *paylen = pp - (paylen + 1);
+                *buflen = pp - buf;
+                // send it
+                stpropnci_pump_post(MSG_DIR_TO_STACK, stpropnci_state.tmpbuff,
+                                    *stpropnci_state.tmpbufflen, nullptr);
+                stpropnci_state.is_rf_intf_cust_tx = true;
+              }
+
+              // reset pointer
+              pp = buf;
+              stpropnci_tmpbuff_reset();
+
+              // Now we need to create STD RF_INTF_ACTIVATED_NTF
+              if (payload[5] != NFC_PROTOCOL_UNKNOWN) {
+                // Case CUST_POLL_STD_RESP
+                rf_tech_mode = payload[10];
+              } else {
+                // Case CUST_POLL_NOSTD_RESP
+                switch (payload[10]) {
+                  case PROP_A_POLL:
+                    rf_tech_mode = NFC_DISCOVERY_TYPE_POLL_A;
+                    break;
+                  case PROP_B_POLL:
+                    rf_tech_mode = NFC_DISCOVERY_TYPE_POLL_B;
+                    break;
+                  case PROP_F_POLL:
+                    rf_tech_mode = NFC_DISCOVERY_TYPE_POLL_F;
+                    break;
+                  case PROP_V_POLL:
+                    rf_tech_mode = NFC_DISCOVERY_TYPE_POLL_V;
+                    break;
+                  case PROP_B_NOEOFSOF_POLL:
+                    rf_tech_mode = NFC_DISCOVERY_TYPE_POLL_B;
+                    break;
+                  case PROP_B_NOSOF_POLL:
+                    rf_tech_mode = NFC_DISCOVERY_TYPE_POLL_B;
+                    break;
+                  default:
+                    LOG_E("Unknown RF tech mode: 0x%x", payload[10]);
+                    break;
+                }
+              }
+
+              NCI_MSG_BLD_HDR0(pp, NCI_MT_NTF, NCI_GID_RF_MANAGE);
+              NCI_MSG_BLD_HDR1(pp, NCI_MSG_RF_INTF_ACTIVATED);
+              paylen = pp++;
+
+              UINT8_TO_STREAM(pp, payload[3]);    // 3 - RF disc id ID
+              UINT8_TO_STREAM(pp, payload[4]);    // 4 - RF interface
+              UINT8_TO_STREAM(pp, payload[5]);    // 5 - RF protocol
+              UINT8_TO_STREAM(pp, rf_tech_mode);  // 6 - RF tech mode
+              UINT8_TO_STREAM(pp, payload[7]);    // 7 - max data payload size
+              UINT8_TO_STREAM(pp, payload[8]);    // 8 - init nb credits
+              UINT8_TO_STREAM(pp, len_tp);        // 9 - length RF tech param
+              ARRAY_TO_STREAM(pp, payload + 12,
+                              len_tp);  // 10 - RF tech param
+              UINT8_TO_STREAM(pp,
+                              rf_tech_mode);  // 10+n - data ex tch and mode
+              ARRAY_TO_STREAM(
+                  pp, payload + 13 + len_tp,
+                  payload[2] - 10 - len_tp);  // 11+n - remaining data
+
+              *paylen = pp - (paylen + 1);
+              *buflen = pp - buf;
+              // send it
+              handled =
+                  stpropnci_pump_post(MSG_DIR_TO_STACK, stpropnci_state.tmpbuff,
+                                      *stpropnci_state.tmpbufflen, nullptr);
+            }
           }
           break;
 
@@ -486,6 +606,10 @@ bool stpropnci_process_std(bool inform_only, bool dir_from_upper,
               }
             }
             stpropnci_state.wait_nfcee_ntf = false;
+            if (stpropnci_state.is_ese_stuck) {
+              // Drop NTF due to handle recovery
+              handled = true;
+            }
           }
           break;
         case NCI_MSG_NFCEE_POWER_LINK_CTRL:
@@ -638,9 +762,12 @@ bool stpropnci_send_core_reset_ntf_recovery(uint8_t hint) {
 ** Returns          true
 **
 *******************************************************************************/
-bool stpropnci_cb_passthrough_rsp(bool dir_from_upper, const uint8_t *payload,
-                                  const uint16_t payloadlen, uint8_t mt,
-                                  uint8_t gid, uint8_t oid) {
+bool stpropnci_cb_passthrough_rsp(__attribute__((unused)) bool dir_from_upper,
+                                  const uint8_t *payload,
+                                  const uint16_t payloadlen,
+                                  __attribute__((unused)) uint8_t mt,
+                                  __attribute__((unused)) uint8_t gid,
+                                  __attribute__((unused)) uint8_t oid) {
   return stpropnci_pump_post(MSG_DIR_TO_STACK, payload, payloadlen, nullptr);
 }
 
@@ -654,9 +781,12 @@ bool stpropnci_cb_passthrough_rsp(bool dir_from_upper, const uint8_t *payload,
 ** Returns          true
 **
 *******************************************************************************/
-bool stpropnci_cb_block_rsp(bool dir_from_upper, const uint8_t *payload,
-                            const uint16_t payloadlen, uint8_t mt, uint8_t gid,
-                            uint8_t oid) {
+bool stpropnci_cb_block_rsp(__attribute__((unused)) bool dir_from_upper,
+                            __attribute__((unused)) const uint8_t *payload,
+                            __attribute__((unused)) const uint16_t payloadlen,
+                            __attribute__((unused)) uint8_t mt,
+                            __attribute__((unused)) uint8_t gid,
+                            __attribute__((unused)) uint8_t oid) {
   // Drop this response, don t forward.
   return true;
 }

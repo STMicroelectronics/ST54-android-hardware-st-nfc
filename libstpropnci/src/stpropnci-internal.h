@@ -119,12 +119,28 @@ typedef struct watchdog {
 #define NFC_PROTO_T2T_MASK 0x01
 #define NFC_PROTO_T3T_MASK 0x02
 #define NFC_PROTO_T4T_MASK 0x04
+
 typedef struct {
   uint8_t nfcee_id; /* NFCEE ID                         */
   uint8_t la;       /* Listen A protocols    */
   uint8_t lb;       /*Listen B protocols                     */
   uint8_t lf;       /*Listen B protocols                     */
 } ee_info_t;
+
+#define CUST_POLL_NO_RSP 0x00
+#define CUST_POLL_STD_RSP 0x01
+#define CUST_POLL_NOSTD_RSP 0x02
+
+#define NFC_A_FRAME 0x00
+#define NFC_B_FRAME 0x01
+
+#define NFC_CUST_PASSIVE_POLL_MODE 0x78
+#define PROP_A_POLL 0x80
+#define PROP_B_POLL 0x81
+#define PROP_F_POLL 0x82
+#define PROP_V_POLL 0x83
+#define PROP_B_NOEOFSOF_POLL 0x84
+#define PROP_B_NOSOF_POLL 0x85
 
 /* State machine */
 extern struct stpropnci_state {
@@ -153,6 +169,8 @@ extern struct stpropnci_state {
 
   // Flag indicating if we use observe mode per tech or not.
   bool observe_per_tech;
+  uint8_t observe_per_tech_bitmap;
+  uint8_t temp_observe_per_tech_bitmap;
   // Flag indicating observe mode is temporarily suspended.
   bool observe_mode_suspended;
 
@@ -193,6 +211,26 @@ extern struct stpropnci_state {
   uint8_t uid[10];
   uint8_t uid_length;
   bool is_card_a_on;
+
+  // reporting of received empty I frames
+  bool is_reader_activation;
+  bool is_tx_empty_iframe;
+
+  // Does eSE support felica applet?
+  bool is_ese_felica_enabled;
+
+  // Was RF custom passive poll frame set?
+  bool is_cust_poll_frame_set;
+  bool is_rf_intf_cust_tx;
+
+  // Handle SWP repeat frames
+  bool is_ese_stuck;
+  int last_tx_cnt;
+  int last_rx_param_len;
+  bool last_rx_is_frag[4];
+  int last_tx_len;
+  uint8_t last_rx_param[30];
+  uint8_t last_tx[5];
 
   /*****************************
        Internal lib configs
