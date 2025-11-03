@@ -72,6 +72,21 @@ bool stpropnci_init(int loglvl, outgoing_cb_t cb);
 void stpropnci_change_log_level(int loglvl);
 
 /*
+ * stpropnci_change_config:
+ *
+ * This enables to update some of the configs of the library.
+ *
+ */
+void stpropnci_change_config(const char* config_key, const char* config_value);
+#define STPROPNCI_CFG_FELICA_ESE_SUPPORT "felica_ese_support"
+#define STPROPNCI_CFG__true "true"
+#define STPROPNCI_CFG__false "false"
+#define STPROPNCI_CFG_FIELD_ON_TOO_LONG_TIMER "use_field_on_too_long_timer"
+#define STPROPNCI_CFG_FIELD_ON_AFTER_SCREEN_OFF_TIMER \
+  "use_field_on_too_long_after_screen_off_timer"
+#define STPROPNCI_CFG_FW_DEBUG_GEN "fw_debug_gen"
+
+/*
  * stpropnci_st_set_hal_passthrough:
  *
  * For HAL AIDL version > 1, make sure the HAL's libstpropnci does not interfere

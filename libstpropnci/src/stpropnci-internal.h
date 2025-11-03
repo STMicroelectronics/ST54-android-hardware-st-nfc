@@ -22,6 +22,7 @@
 #include <pthread.h>
 #include <nci_defs.h>
 #include <nfc_types.h>
+#include <string>
 #include <stpropnci.h>
 
 #include <stpropnci_prop_st.h>
@@ -159,6 +160,7 @@ extern struct stpropnci_state {
   // Data from the last CORE_RESET_NTF (len=0 if not received)
   uint8_t manu_specific_info_len;
   uint8_t manu_specific_info[40];
+  uint8_t gen_for_dbg_fw;
   enum {
     CLF_MODE_UNKNOWN = 0,
     CLF_MODE_LOADER,
@@ -180,12 +182,19 @@ extern struct stpropnci_state {
   // PROP_PWR_MON_RW stability related
   bool pwr_mon_isActiveRW;
   int pwr_mon_errorCount;
+  bool use_field_on_too_long_after_screen_off_timer;
+  bool use_field_on_too_long_timer;
 
   // Storage for nfcee Ids of active NFCEE
   uint8_t active_nfcee_ids[5];
   uint8_t nb_active_nfcees;
   bool wait_nfcee_ntf;
   uint8_t waiting_nfcee_id;
+
+  // Keep last NCI_MSG_RF_EE_DISCOVERY_REQ as a method to trigger a LMRT
+  // resending.
+  uint8_t last_ee_discovery_req[MAX_NCI_MESSAGE_LEN];
+  uint8_t last_ee_discovery_req_length;
 
   // APDU gate data
   bool apdu_gate_ready;
@@ -231,6 +240,24 @@ extern struct stpropnci_state {
   int last_tx_len;
   uint8_t last_rx_param[30];
   uint8_t last_tx[5];
+
+  // Store listen tech A route
+  uint8_t listen_tech_a_route;
+  uint8_t rf_disc_cmd[MAX_NCI_MESSAGE_LEN];
+  uint8_t rf_disc_cmd_length;
+  uint8_t la_sel_info;
+  uint8_t la_sel_info_from_stack;
+  bool la_sel_info_set_by_stack;
+
+  // Store timestamp for last RF_DEACTIVATE_CMD
+  struct timespec ts_last_rf_deactivate;
+  struct timespec ts_last_rf_discovery;
+
+  // Clear the exit frame table at startup just before NFCEE_DISCOVER_CMD
+  bool exit_frame_cleared;
+
+  // Timestamp for last RF_DEACTIVATE_NTF
+  struct timespec ts_last_rf_deact_ntf;
 
   /*****************************
        Internal lib configs
@@ -307,9 +334,15 @@ extern struct stpropnci_state {
 // Generation 3 firmwares: 2.x on ST21NFCL/ST54L
 #define IS_FW_GEN_3() (IS_HW_54L_FAMILY() && (FW_VERSION_MAJOR == 0x02))
 
+// Debug firmwares: d.x. Return high generation number by default.
+#define IS_FW_DEBUG() (FW_VERSION_MAJOR == 0x0D)
+#define FW_DEBUG_GET_GEN() (stpropnci_state.gen_for_dbg_fw ?: 10)
+
 // Returns the generation of the FW or 0 if unknown.
-#define GET_FW_GEN() \
-  (IS_FW_GEN_3() ? 3 : (IS_FW_GEN_2() ? 2 : (IS_FW_GEN_1() ? 1 : (0))))
+#define GET_FW_GEN()                    \
+  (IS_FW_DEBUG()   ? FW_DEBUG_GET_GEN() \
+   : IS_FW_GEN_3() ? 3                  \
+                   : (IS_FW_GEN_2() ? 2 : (IS_FW_GEN_1() ? 1 : (0))))
 
 /* Process standard NCI frames (GID 0-2 and data) */
 bool stpropnci_process_std(bool inform_only, bool dir_from_upper,
@@ -365,5 +398,13 @@ bool stpropnci_process_prop_android(bool inform_only, bool dir_from_upper,
                                     const uint8_t* payload,
                                     const uint16_t payloadlen, uint8_t mt,
                                     uint8_t oid);
+
+/*************************
+     configuration file
+  *************************/
+
+void stpropnci_cfg_write_value(const std::string& child_name,
+                               const std::string& value);
+std::string stpropnci_cfg_read_value(const std::string& child_name);
 
 #endif  // STPROPNCI_INTERNAL_H

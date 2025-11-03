@@ -287,6 +287,12 @@ bool stpropnci_process_prop_st(bool inform_only, bool dir_from_upper,
               stpropnci_state.is_ese_felica_enabled =
                   ((payload[4] & 0xFF) == 0x01 ? true : false);
 
+              // Save to configuration file
+              stpropnci_cfg_write_value(STPROPNCI_CFG_FELICA_ESE_SUPPORT,
+                                        stpropnci_state.is_ese_felica_enabled
+                                            ? STPROPNCI_CFG__true
+                                            : STPROPNCI_CFG__false);
+
               NCI_MSG_BLD_HDR0(pp, NCI_MT_RSP, NCI_GID_PROP);
               NCI_MSG_BLD_HDR1(pp, ST_PROP_NCI_OID);
               paylen = pp++;
@@ -298,6 +304,13 @@ bool stpropnci_process_prop_st(bool inform_only, bool dir_from_upper,
               handled =
                   stpropnci_pump_post(MSG_DIR_TO_STACK, stpropnci_state.tmpbuff,
                                       *stpropnci_state.tmpbufflen, nullptr);
+
+              // Resend last EE discovery req, so stack triggers an LMRT update.
+              if (stpropnci_state.last_ee_discovery_req_length) {
+                (void)stpropnci_pump_post(
+                    MSG_DIR_TO_STACK, stpropnci_state.last_ee_discovery_req,
+                    stpropnci_state.last_ee_discovery_req_length, nullptr);
+              }
               break;
 
             case ST_PROP_SET_RF_CUSTOM_POLL_FRAME:
@@ -1119,7 +1132,7 @@ void eseMonitor(uint8_t format, uint16_t data_len, const uint8_t* p_data,
                 data_len < 7 ? data_len - 2 : 5)) {
       // identical with the last frame we sent
       stpropnci_state.last_tx_cnt++;
-      if (stpropnci_state.last_tx_cnt >= 30) {
+      if (stpropnci_state.last_tx_cnt >= 10) {
         // Send PROP_TEST_RESET_ST54J_SE then restart NFC
         LOG_E(
             "Same frame repeat on SWP, Start task disable/reset eSE, restart "

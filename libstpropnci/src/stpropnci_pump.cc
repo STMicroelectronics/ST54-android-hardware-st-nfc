@@ -395,6 +395,25 @@ static void* message_pump_thr(__attribute__((unused)) void* st) {
         updated = true;
         m = message_pop_first(&stpropnci_state.pumpstate.toAck,
                               &stpropnci_state.pumpstate.toAck_ctr);
+
+        // if this is RF data message
+        if (m->payload[0] == 0x00) {
+          // if there was a rf_deactivate_ntf when the data was sent
+          // note: t value is around the time the message was posted here.
+          if (stpropnci_state.ts_last_rf_deact_ntf.tv_sec != 0) {
+            tssub(&t,
+                  10);  // add some margin for processing and transmission time
+            if (tscmp(stpropnci_state.ts_last_rf_deact_ntf, t) > 0) {
+              // last deactivation happened since this data was sent
+              LOG_D(
+                  "RF data message was not acked, but a deactivate ntf was "
+                  "received around the same time, so ignore it.");
+              message_pool_put(m);
+              continue;
+            }
+          }
+        }
+
         if (!m->retried) {
           // enqueue it for sending next
           LOG_D("Message was not acked (once): %02hhx%02hhx%02hhx, resend",
@@ -405,7 +424,7 @@ static void* message_pump_thr(__attribute__((unused)) void* st) {
           // loop now so it is handled quickly
           continue;
         } else {
-          LOG_D(
+          LOG_E(
               "Message was not acked (twice): %02hhx%02hhx%02hhx, emulate "
               "CORE_RESET_NTF",
               m->payload[0], m->payload[1], m->payload[2]);

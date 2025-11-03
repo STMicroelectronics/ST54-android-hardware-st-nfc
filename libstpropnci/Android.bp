@@ -66,6 +66,7 @@ cc_library_static {
         "libcutils",
         "liblog",
         "libbase",
+        "libxml2",
     ],
     target: {
         vendor: {

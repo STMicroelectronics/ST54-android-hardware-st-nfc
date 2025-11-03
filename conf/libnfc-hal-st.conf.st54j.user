@@ -94,15 +94,18 @@ OFF_HOST_SIM_PIPE_ID=0x3E
 #This settings will be used when application does not set this parameter
 # eSE   0x82 (eSE),    0x86 (eUICC/SPI-SE)
 # UICC  0x81 (UICC_1), 0x85 (UICC_2)
-#
-#We deliver with FF by default which is an invalid EE ID so there is no route.
-#It is up to the wallet to override this route with overwriteRoutingTable
+DEFAULT_SYS_CODE_ROUTE=0x86
+
+# Note: for some previous versions we delivered by default FF in above config,
+# which is an invalid EE ID so there is no route.
+# In that case it is up to the wallet to override this route with overwriteRoutingTable
 # (via setUserDefaultRoute) once the Felica applet instance has been created.
-DEFAULT_SYS_CODE_ROUTE=0xFF
 
 ###############################################################################
-#Set the Felica T3T System Code supported power state:
-DEFAULT_SYS_CODE_PWR_STATE=0x3B
+# Set the Felica T3T System Code supported power state:
+#
+#  Change to 0x3B if your eSE is ready to respond to Felica commands
+DEFAULT_SYS_CODE_PWR_STATE=0x00
 
 ###############################################################################
 # FW and CONF upgrade control.
@@ -129,7 +132,7 @@ STNFC_FW_CONF_STORAGE="/vendor/etc/"
 #We deliver with FF by default which is an invalid EE ID so there is no route.
 #It is up to the wallet to override this route with overwriteRoutingTable
 # (via setUserDefaultRoute) once the Felica applet instance has been created.
-DEFAULT_NFCF_ROUTE=0xFF
+DEFAULT_NFCF_ROUTE=0x86
 
 ###############################################################################
 # Configure the default off-host route.

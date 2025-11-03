@@ -157,6 +157,9 @@
 #define NCI_MSG_RF_FRAME_INFO_NTF 0x18
 #endif
 
+/* This comes from the HAL config file */
+#define ST_NCI_PROTOCOL_MIFARE 0x90
+
 /**************************
     ST NCI management
  **************************/

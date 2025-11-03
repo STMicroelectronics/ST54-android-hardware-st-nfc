@@ -49,7 +49,7 @@ bool stpropnci_init(int loglvl, outgoing_cb_t cb) {
 #define VARIANT "vendor"
 #endif
   LOG_I(
-      "(re)Initializing (version:25Q2-BP2A-20250727-Mainline-25W31p0, "
+      "(re)Initializing (version:25Q2-BP2A-20251010-Mainline-25W41p0, "
       "variant:" VARIANT "), log:%d",
       loglvl);
 
@@ -73,6 +73,16 @@ bool stpropnci_init(int loglvl, outgoing_cb_t cb) {
     return false;
   }
 
+  // read from configuration file
+  std::string felicaValue =
+      stpropnci_cfg_read_value(STPROPNCI_CFG_FELICA_ESE_SUPPORT);
+  if (felicaValue == STPROPNCI_CFG__true) {
+    stpropnci_state.is_ese_felica_enabled = true;
+  } else {
+    // false = default value
+    stpropnci_state.is_ese_felica_enabled = false;
+  }
+
   (void)pthread_mutex_unlock(&reentry_lock);
   return true;
 }
@@ -93,6 +103,68 @@ void stpropnci_change_log_level(int loglvl) {
   (void)pthread_mutex_lock(&reentry_lock);
   stpropnci_loglvl = loglvl;
   (void)pthread_mutex_unlock(&reentry_lock);
+}
+
+/*******************************************************************************
+**
+** Function         stpropnci_change_config
+**
+** Description      Update a configuration at runtime
+**
+** Params:
+**
+** Returns          -
+**
+*******************************************************************************/
+void stpropnci_change_config(const char* config_key, const char* config_value) {
+  /* Behavior depends on the config_key being updated, this only accepts known
+   * configs */
+  if (!strncmp(STPROPNCI_CFG_FELICA_ESE_SUPPORT, config_key,
+               strlen(STPROPNCI_CFG_FELICA_ESE_SUPPORT))) {
+    if (!strncmp(STPROPNCI_CFG__true, config_value,
+                 strlen(STPROPNCI_CFG__true))) {
+      stpropnci_state.is_ese_felica_enabled = true;
+    } else {
+      // false = default value
+      stpropnci_state.is_ese_felica_enabled = false;
+    }
+    LOG_D("Updated stpropnci_state.is_ese_felica_enabled : %s",
+          stpropnci_state.is_ese_felica_enabled ? "true" : "false");
+    // store the updated value
+    stpropnci_cfg_write_value(STPROPNCI_CFG_FELICA_ESE_SUPPORT,
+                              stpropnci_state.is_ese_felica_enabled
+                                  ? STPROPNCI_CFG__true
+                                  : STPROPNCI_CFG__false);
+    return;
+  } else if (strncmp(STPROPNCI_CFG_FIELD_ON_TOO_LONG_TIMER, config_key,
+                     strlen(STPROPNCI_CFG_FIELD_ON_TOO_LONG_TIMER))) {
+    if (!strncmp(STPROPNCI_CFG__true, config_value,
+                 strlen(STPROPNCI_CFG__true))) {
+      stpropnci_state.use_field_on_too_long_timer = true;
+    } else {
+      // false = default value
+      stpropnci_state.use_field_on_too_long_timer = false;
+    }
+    LOG_D("Updated stpropnci_state.use_field_on_too_long_timer : %s",
+          stpropnci_state.use_field_on_too_long_timer ? "true" : "false");
+    return;
+  } else if (strncmp(STPROPNCI_CFG_FIELD_ON_AFTER_SCREEN_OFF_TIMER, config_key,
+                     strlen(STPROPNCI_CFG_FIELD_ON_AFTER_SCREEN_OFF_TIMER))) {
+    if (!strncmp(STPROPNCI_CFG__true, config_value,
+                 strlen(STPROPNCI_CFG__true))) {
+      stpropnci_state.use_field_on_too_long_after_screen_off_timer = true;
+    } else {
+      // false = default value
+      stpropnci_state.use_field_on_too_long_after_screen_off_timer = false;
+    }
+    LOG_D(
+        "Updated "
+        "stpropnci_state.use_field_on_too_long_after_screen_off_timer : %s",
+        stpropnci_state.use_field_on_too_long_after_screen_off_timer ? "true"
+                                                                     : "false");
+    return;
+  }
+  LOG_E("Unsupported config, ignored: %s", config_key);
 }
 
 /*******************************************************************************

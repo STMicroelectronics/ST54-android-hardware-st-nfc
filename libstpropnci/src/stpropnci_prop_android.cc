@@ -90,6 +90,9 @@ uint16_t iso14443_crc(const uint8_t *data, size_t szLen, int type);
 #define Type_A 0
 #define Type_B 1
 
+uint32_t prev_ts = 0;
+uint64_t timestamp_us = 0;
+
 /*******************************************************************************
 **
 ** Function         stpropnci_process_prop_android
@@ -124,7 +127,6 @@ bool stpropnci_process_prop_android(__attribute__((unused)) bool inform_only,
           break;
 
         case NCI_QUERY_ANDROID_PASSIVE_OBSERVE:
-
           // Prepare the native message based on
           // stpropnci_state.observe_per_tech
           stpropnci_build_get_observer_cmd(stpropnci_state.tmpbuff,
@@ -165,9 +167,6 @@ bool stpropnci_process_prop_android(__attribute__((unused)) bool inform_only,
 
         case NCI_ANDROID_SET_PASSIVE_OBSERVER_TECH:
           stpropnci_state.temp_observe_per_tech_bitmap = payload[4];
-          //This should be filled when GET_CAPS is called, but it might not be
-          //called for unitary VTS tests.
-          stpropnci_state.observe_per_tech = true;
           // Prepare the native message: RF_SET_LISTEN_OBSERVE_MODE_CMD
           stpropnci_build_rf_set_listen_passive_observer_cmd(
               stpropnci_state.tmpbuff, stpropnci_state.tmpbufflen, payload[4]);
@@ -524,7 +523,8 @@ static void stpropnci_build_get_caps_rsp(uint8_t *buf, uint16_t *buflen) {
 static void stpropnci_build_get_observer_cmd(uint8_t *buf, uint16_t *buflen) {
   uint8_t *pp = buf, *paylen;
 
-  if (stpropnci_state.observe_per_tech) {
+  if (stpropnci_state.observe_per_tech ||
+      stpropnci_state.observe_per_tech_bitmap) {
     NCI_MSG_BLD_HDR0(pp, NCI_MT_CMD, NCI_GID_RF_MANAGE);
     NCI_MSG_BLD_HDR1(pp, NCI_MSG_RF_GET_LISTEN_OBSERVE_MODE_STATE);
     paylen = pp++;
@@ -569,12 +569,20 @@ static bool stpropnci_cb_get_observer_rsp(
   UINT8_TO_STREAM(pp, NCI_QUERY_ANDROID_PASSIVE_OBSERVE);
   UINT8_TO_STREAM(pp, payload[3]);
   if (payload[3] == NCI_STATUS_OK) {
-    UINT8_TO_STREAM(pp, stpropnci_state.observe_per_tech
-                            ? (((payload[4] == OBSERVE_NONE) ||
-                                (stpropnci_state.observe_mode_suspended))
-                                   ? NCI_ANDROID_PASSIVE_OBSERVE_PARAM_DISABLE
-                                   : stpropnci_state.observe_per_tech_bitmap)
-                            : payload[7]);
+    if (stpropnci_state.observe_per_tech ||
+        stpropnci_state.observe_per_tech_bitmap) {
+      // New method, we use the RF_GET_LISTEN_OBSERVE_MODE_STATE response
+      if (stpropnci_state.observe_mode_suspended) {
+        // If the observe mode is suspended, we report the bitmap as 0
+        UINT8_TO_STREAM(pp, NCI_ANDROID_PASSIVE_OBSERVE_PARAM_DISABLE);
+      } else {
+        // Report the bitmap as it was set by the stack
+        UINT8_TO_STREAM(pp, stpropnci_state.observe_per_tech_bitmap);
+      }
+    } else {
+      // Old method, we use the CORE_GET_CONFIG response
+      UINT8_TO_STREAM(pp, payload[7]);
+    }
   }
 
   // Update the pending fields
@@ -666,6 +674,7 @@ static bool stpropnci_cb_set_config_observer_rsp(
 #define FORMAT_IS_ST21NFCD(f) (((f) & 0xF0) == 0x10)
 #define FORMAT_IS_ST54J(f) (((f) & 0xF0) == 0x20)
 #define FORMAT_IS_ST54L(f) (((f) & 0xF0) == 0x30)
+#define MAX_TIMESTAMP 0xFFFFFFFF
 
 static bool stpropnci_cb_generate_polling_loop_frame(
     __attribute__((unused)) bool dir_from_upper, const uint8_t *payload,
@@ -679,7 +688,7 @@ static bool stpropnci_cb_generate_polling_loop_frame(
   int current_tlv_pos = 6;  // position of first byte of the first TLV
   int current_tlv_length;
   int conv_tlv = 0;
-  uint32_t ts = 0;
+  uint32_t curr_ts = 0;
 
   stpropnci_tmpbuff_reset();
 
@@ -735,22 +744,36 @@ static bool stpropnci_cb_generate_polling_loop_frame(
 
       // Prepare the timestamp
       if ((format & 0x1) == 0 || current_tlv_length < 6) {
-        ts = 0;
+        curr_ts = 0;
+        timestamp_us = 0;
       } else {
         availlen -= 4;
-        ts = (payload[current_tlv_pos + current_tlv_length - 4] << 24) |
-             (payload[current_tlv_pos + current_tlv_length - 3] << 16) |
-             (payload[current_tlv_pos + current_tlv_length - 2] << 8) |
-             payload[current_tlv_pos + current_tlv_length - 1];
+        curr_ts = (payload[current_tlv_pos + current_tlv_length - 4] << 24) |
+                  (payload[current_tlv_pos + current_tlv_length - 3] << 16) |
+                  (payload[current_tlv_pos + current_tlv_length - 2] << 8) |
+                  payload[current_tlv_pos + current_tlv_length - 1];
+
+        uint32_t elapsed_ts;
+        if (curr_ts < prev_ts) {  // timer has reset on NFCC side
+          elapsed_ts = (0xFFFFFFFF - prev_ts) + curr_ts;
+        } else {
+          elapsed_ts = curr_ts - prev_ts;
+        }
+
+        uint32_t elapsed_us = 0;
         if ((format & 0x30) == 0x30) {
           // ST54L: 3.95us unit
-          ts = (uint32_t)(((double)((long long)ts * 1024) / 259) + 0.5);
+          elapsed_us =
+              (uint32_t)(((double)((long long)elapsed_ts * 1024) / 259) + 0.5);
         } else {
           // ST54J/K: 4.57us unit
-          ts = (uint32_t)(((double)((long long)ts * 128) / 28) + 0.5);
+          elapsed_us =
+              (uint32_t)(((double)((long long)elapsed_ts * 128) / 28) + 0.5);
         }
+        timestamp_us += elapsed_us;
+        timestamp_us = timestamp_us & MAX_TIMESTAMP;
+        prev_ts = curr_ts;
       }
-
       // Fill the TLV in PF based on FW log data
       switch (T) {
         case FWLOG_T_fieldOn:
@@ -759,10 +782,10 @@ static bool stpropnci_cb_generate_polling_loop_frame(
           UINT8_TO_STREAM(pp, TAG_FIELD_CHANGE);
           UINT8_TO_STREAM(pp, flag);
           UINT8_TO_STREAM(pp, 6 /* fixed length */);
-          UINT8_TO_STREAM(pp, (ts >> 24) & 0xFF);
-          UINT8_TO_STREAM(pp, (ts >> 16) & 0xFF);
-          UINT8_TO_STREAM(pp, (ts >> 8) & 0xFF);
-          UINT8_TO_STREAM(pp, ts & 0xFF);
+          UINT8_TO_STREAM(pp, (timestamp_us >> 24) & 0xFF);
+          UINT8_TO_STREAM(pp, (timestamp_us >> 16) & 0xFF);
+          UINT8_TO_STREAM(pp, (timestamp_us >> 8) & 0xFF);
+          UINT8_TO_STREAM(pp, timestamp_us & 0xFF);
           UINT8_TO_STREAM(pp, gain);
           UINT8_TO_STREAM(pp, (T == FWLOG_T_fieldOn) ? 0x01 : 0x00);
           break;
@@ -878,10 +901,10 @@ static bool stpropnci_cb_generate_polling_loop_frame(
           UINT8_TO_STREAM(pp, type);
           UINT8_TO_STREAM(pp, flag);
           UINT8_TO_STREAM(pp, 5 + availlen);
-          UINT8_TO_STREAM(pp, (ts >> 24) & 0xFF);
-          UINT8_TO_STREAM(pp, (ts >> 16) & 0xFF);
-          UINT8_TO_STREAM(pp, (ts >> 8) & 0xFF);
-          UINT8_TO_STREAM(pp, ts & 0xFF);
+          UINT8_TO_STREAM(pp, (timestamp_us >> 24) & 0xFF);
+          UINT8_TO_STREAM(pp, (timestamp_us >> 16) & 0xFF);
+          UINT8_TO_STREAM(pp, (timestamp_us >> 8) & 0xFF);
+          UINT8_TO_STREAM(pp, timestamp_us & 0xFF);
           UINT8_TO_STREAM(pp, gain);
           if (availlen > 0) {
             ARRAY_TO_STREAM(pp, payload + (reallenidx + 2), availlen);
@@ -968,7 +991,7 @@ static bool stpropnci_cb_rf_set_listen_passive_observer_rsp(
     stpropnci_state.observe_per_tech_bitmap =
         stpropnci_state.temp_observe_per_tech_bitmap;
   }
-
+  stpropnci_state.temp_observe_per_tech_bitmap = 0;
 
   // Update the pending fields
   *paylen = pp - (paylen + 1);

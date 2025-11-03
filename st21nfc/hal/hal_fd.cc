@@ -180,6 +180,8 @@ static const char* get_fw_default_name() {
   } else if ((mFWInfo->chipHwVersion == HW_ST54L) ||
              (mFWInfo->chipHwVersion == HW_NFCL)) {
     return "st54l_fw.bin";
+  } else if (mFWInfo->chipHwVersion == HW_ST25RN300) {
+    return "st25rn300_fw.bin";
   } else {
     // default
     return "st21nfc_fw.bin";
@@ -194,6 +196,8 @@ static const char* get_fw_default_cfg_name() {
     return "st54j_conf.txt";
   } else if (mFWInfo->chipHwVersion == HW_NFCD) {
     return "st21nfc_conf.txt";
+  } else if (mFWInfo->chipHwVersion == HW_ST25RN300) {
+    return "st25rn300_conf.txt";
   } else {
     // default
     return "st21nfc_conf.txt";
@@ -208,6 +212,8 @@ static const char* get_fw_template_cfg_name() {
     return "st54j_conf_%s.txt";
   } else if (mFWInfo->chipHwVersion == HW_NFCD) {
     return "st21nfc_conf_%s.txt";
+  } else if (mFWInfo->chipHwVersion == HW_ST25RN300) {
+    return "st25rn300_conf_%s.txt";
   } else {
     // default
     return "st21nfc_conf_%s.txt";
@@ -360,6 +366,8 @@ static void hal_fd_load_files() {
         mFWInfo->fileAuthKeyId = 0x00;
       }
       fsetpos(mFwFileBin, &mPosInit);  // reset pos in stream
+    } else if (mFWInfo->chipHwVersion == HW_ST25RN300) {
+      STLOG_HAL_E("%s ST25RN300 firmware upgrade not supported.\n", __func__);
     } else {
       ret = fread(mBinData, sizeof(uint8_t), 4, mFwFileBin);
       if (ret != 4) {
@@ -691,10 +699,19 @@ uint8_t ft_cmd_HwReset(uint8_t* pdata, uint8_t* clf_mode, bool force,
   if ((mFWInfo->chipHwVersion != HW_NFCD) &&
       (mFWInfo->chipHwVersion != HW_ST54J) &&
       (mFWInfo->chipHwVersion != HW_ST54L) &&
-      (mFWInfo->chipHwVersion != HW_NFCL)) {
+      (mFWInfo->chipHwVersion != HW_NFCL) &&
+      (mFWInfo->chipHwVersion != HW_ST25RN300)) {
     // This version is not supported yet.
     STLOG_HAL_D("No update for this hardware version.\n");
     return (*clf_mode == FT_CLF_MODE_ROUTER) ? FU_NOTHING_TO_DO : FU_ERROR;
+  }
+
+  if ((mFWInfo->chipHwVersion == HW_ST25RN300) &&
+      (*clf_mode != FT_CLF_MODE_ROUTER)) {
+    STLOG_HAL_D(
+        "Firmware update is not supported for ST25RN300. Chip is in loader "
+        "mode, contact ST...\n");
+    return FU_ERROR;
   }
 
   if ((mFWInfo->chipHwVersion == HW_ST54L) ||
@@ -744,7 +761,12 @@ uint8_t ft_cmd_HwReset(uint8_t* pdata, uint8_t* clf_mode, bool force,
     params_needed = true;
   }
 
-  auth_requested = AuthCheckCoreResetNtf(pdata, params_needed);
+  if (mFWInfo->chipHwVersion == HW_ST25RN300) {
+    STLOG_HAL_D("%s - No need to chech AUTH status\n", __func__);
+    auth_requested = false;
+  } else {
+    auth_requested = AuthCheckCoreResetNtf(pdata, params_needed);
+  }
   if (auth_requested) {
     STLOG_HAL_D("%s - Need to chech AUTH status\n", __func__);
     return FU_AUTH;

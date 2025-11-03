@@ -483,7 +483,6 @@ int CNfcConfig::file_exist(const char* filename) {
 CNfcConfig& CNfcConfig::GetInstance() {
   static CNfcConfig theInstance;
   char config_name_generic[MAX_DATA_CONFIG_PATH_LEN] = {'\0'};
-  static int reg_init = 0;
 
   if (theInstance.size() == 0 && theInstance.mValidFile) {
     string strPath;

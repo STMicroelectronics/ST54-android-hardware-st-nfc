@@ -85,6 +85,7 @@ typedef enum {
 #define HW_ST54J 0x05
 #define HW_ST54L 0x06
 #define HW_NFCL 0x07
+#define HW_ST25RN300 0x08
 
 extern const int nfc_patch_cmd_nb;
 extern const char ApduAuthentRecov[24];

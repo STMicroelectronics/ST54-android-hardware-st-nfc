@@ -48,7 +48,7 @@ extern bool I2cOpenLayer(void* dev, HAL_CALLBACK callb, HALHANDLE* pHandle);
 typedef int (*STEseReset)(void);
 
 const char* halVersion =
-    "ST21NFC AIDL HAL Version 25Q2-BP2A-20250727-Mainline-25W31p0";
+    "ST21NFC AIDL HAL Version 25Q2-BP2A-20251010-Mainline-25W41p0";
 
 uint8_t cmd_set_nfc_mode_enable[] = {0x2f, 0x02, 0x02, 0x02, 0x01};
 uint8_t hal_is_closed = 1;

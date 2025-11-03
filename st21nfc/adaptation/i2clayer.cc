@@ -117,6 +117,7 @@ static void* I2cWorkerThread(void* arg) {
   bool readOk = false;
   int eventNum = (notifyResetRequest <= 0) ? 2 : 3;
   bool resetting = false;
+  bool isRstNtfSent = false;
 
   readErrorCnt = 0;
 
@@ -159,7 +160,7 @@ static void* I2cWorkerThread(void* arg) {
       bool isStop = false;
 
       do {
-        if (!recovery_mode) {
+        if (!recovery_mode && !isRstNtfSent) {
           // load first four bytes:
           int hdrsz = is4bytesheader ? 4 : 3;
           int extra = 0;  // did we read past the header?
@@ -265,6 +266,7 @@ static void* I2cWorkerThread(void* arg) {
               STLOG_HAL_E(
                   "! Max number of I2C errors reached, asking for restart\n");
               HalSendUpstream(hHAL, dummy_reset_ntf, sizeof(dummy_reset_ntf));
+              isRstNtfSent = true;
             }
           }
 
